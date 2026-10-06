@@ -13,6 +13,8 @@ Single maintainer. Built to be run for years with a few hours of attention a mon
 - `docs/decisions.md` — settled decisions and the reasoning. Includes what is still open.
 - `docs/security-baseline.md` — non-negotiable security requirements.
 - `docs/deployment.md` — target environment.
+- `docs/design.md` — visual design for the public pages. Not needed until there are
+  templates; the admin stays unstyled.
 
 ## Stack
 
