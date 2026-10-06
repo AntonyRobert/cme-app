@@ -83,6 +83,9 @@ which is why jurisdiction is part of the key. The constraint ignores tombstones,
 merged-away duplicate never blocks the survivor from holding the number. A collision is
 what triggers the merge offer.
 
+Two check constraints: a licence number needs its jurisdiction, and a person cannot be
+merged into themselves.
+
 `role` decides which certificate template renders. Physicians get a CME credit
 certificate, everyone else gets an attendance certificate, **trainees included** (pending
 confirmation with McGill's CPD office, see `decisions.md`). Same pipeline, different
