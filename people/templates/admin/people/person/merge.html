@@ -1,0 +1,105 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+  &rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+  &rsaquo; {{ title }}
+</div>
+{% endblock %}
+
+{% block content %}
+<p>
+  One record is kept. The other becomes a tombstone that points at it: its email
+  addresses move across and its attendance, evaluations and certificates are
+  re-pointed. Nothing is deleted, and the audit log records what moved.
+</p>
+
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="merge_selected">
+  <input type="hidden" name="confirm" value="1">
+  {% for summary in summaries %}
+  <input type="hidden" name="_selected_action" value="{{ summary.person.pk }}">
+  {% endfor %}
+
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Keep</th>
+        <th scope="col">Name</th>
+        <th scope="col">Role</th>
+        <th scope="col">Licence</th>
+        <th scope="col">Email addresses</th>
+        <th scope="col">Linked rows</th>
+        <th scope="col">Created</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for summary in summaries %}
+      <tr>
+        <td>
+          <input type="radio" name="survivor" id="survivor-{{ forloop.counter }}"
+                 value="{{ summary.person.pk }}"
+                 {% if summary.person.pk == default_survivor %}checked{% endif %}
+                 {% if collisions %}disabled{% endif %}>
+        </td>
+        <td>
+          <label for="survivor-{{ forloop.counter }}">
+            {{ summary.person.given_name }} {{ summary.person.family_name }}{% if summary.person.credential %}, {{ summary.person.credential }}{% endif %}
+          </label>
+        </td>
+        <td>{{ summary.person.get_role_display }}</td>
+        <td>
+          {% if summary.person.licence_number %}
+            {{ summary.person.licence_jurisdiction }} {{ summary.person.licence_number }}
+          {% else %}-{% endif %}
+        </td>
+        <td>
+          {% for email in summary.emails %}
+            {{ email.email }}{% if email.is_primary %} (primary){% endif %}<br>
+          {% empty %}-{% endfor %}
+        </td>
+        <td>
+          {% for name, count in summary.counts %}
+            {{ count }} {{ name }}<br>
+          {% empty %}None{% endfor %}
+        </td>
+        <td>{{ summary.person.created_at|date:"Y-m-d" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if collisions %}
+  <h2>This merge cannot go ahead yet</h2>
+  <p class="errornote">
+    Both records hold something only one person can have. Merging would mean
+    throwing one away, and that choice is yours, not the system's. Open the two
+    rows below, decide which one stands, remove the other, then come back.
+  </p>
+  {% for collision in collisions %}
+  <h3>Both have {{ collision.description }}</h3>
+  <ul>
+    {% for person, row, url in collision.rows %}
+    <li>
+      {{ person.given_name }} {{ person.family_name }}:
+      {% if url %}<a href="{{ url }}">{{ row }}</a>{% else %}{{ row }}{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endfor %}
+  <p><a href="{% url opts|admin_urlname:'changelist' %}" class="button">Back to the list</a></p>
+  {% else %}
+  <p>
+    The licence number of the record that is not kept is not copied across.
+    If it belongs to the person, enter it on the kept record afterwards.
+  </p>
+  <div class="submit-row">
+    <input type="submit" class="default" value="Merge these two records">
+    <a href="{% url opts|admin_urlname:'changelist' %}" class="closelink">Cancel</a>
+  </div>
+  {% endif %}
+</form>
+{% endblock %}

@@ -2,6 +2,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, Q
+from django.utils import timezone
 
 from core.models import AppendOnlyMixin, FrozenFieldsMixin, UUIDModel
 from people.models import Person
@@ -206,7 +207,12 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
 
     def __str__(self):
         who = self.person or self.raw_display_name or self.raw_email or "unknown"
-        return f"{who} at {self.event.date} ({self.get_source_display()})"
+        if self.join_at and self.leave_at:
+            join, leave = timezone.localtime(self.join_at), timezone.localtime(self.leave_at)
+            when = f"{join:%Y-%m-%d %H:%M}-{leave:%H:%M}"
+        else:
+            when = f"{self.event.date}, {self.duration_seconds // 60} min"
+        return f"{who} ({when}, {self.get_source_display()})"
 
     @property
     def is_superseded(self):
@@ -220,6 +226,9 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
             if self.join_at is None and self.leave_at is None:
                 self.join_at = self.attributed_to.join_at
                 self.leave_at = self.attributed_to.leave_at
+            # A device row with no times of its own: copy its duration instead.
+            if self.join_at is None and self.duration_seconds is None:
+                self.duration_seconds = self.attributed_to.duration_seconds
         if self.duration_seconds is None and self.join_at and self.leave_at:
             self.duration_seconds = max(int((self.leave_at - self.join_at).total_seconds()), 0)
         if self.person_id is None:

@@ -76,6 +76,7 @@ class Person(UUIDModel):
     class Meta:
         verbose_name_plural = "people"
         ordering = ["family_name", "given_name"]
+        permissions = [("merge_person", "Can merge duplicate people")]
         constraints = [
             # Tombstones are exempt, so a merged-away duplicate never blocks
             # the survivor from holding the number.
