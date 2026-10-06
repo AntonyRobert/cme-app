@@ -76,6 +76,19 @@ sudo systemctl status cme-web --no-pager
 
 Deployment is a command, not a remembered sequence. The sequence is where mistakes live.
 
+Two things this sketch does not handle yet. Fix both when the script is actually written:
+
+- **Database roles.** Production has two: an owner role that runs `migrate`, and the app
+  role gunicorn uses, which has no DDL rights and no UPDATE or DELETE on the audit table.
+  The `migrate` line has to run with the owner role's credentials.
+- **Environment.** `manage.py` run from a shell does not see the systemd
+  `EnvironmentFile`. The script has to load `/etc/cme/env` itself, including
+  `DJANGO_SETTINGS_MODULE=config.settings.prod`, or `manage.py` falls back to dev settings
+  and fails.
+
+Requirements are split: `requirements.txt` is what the server installs,
+`requirements-dev.txt` adds the test and local-only tools.
+
 ## Do not
 
 - No Lambda, API Gateway, Aurora Serverless, or anything scale-to-zero. Cold starts and

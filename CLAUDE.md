@@ -34,16 +34,19 @@ change.
 1. **Authorization on every route that takes an ID.** `/certificate/<id>` must verify the
    object belongs to the requesting person. Object-level checks, not just
    `@login_required`. This is the flaw that leaks real data.
-2. **No `credits` column anywhere except an issued `Certificate`.** Credit is computed by
-   one function. If you find yourself caching a total, stop and ask.
+2. **No stored credit total anywhere except an issued `Certificate` and its lines.** Credit
+   is computed by one function. If you find yourself caching a total, stop and ask.
 3. **Raw uploads are never edited.** Fix the parser and re-parse. Never mutate a stored
    export.
-4. **Attendance corrections add rows.** Use `superseded_by`. Never UPDATE a Teams-sourced
-   row.
+4. **Observations are immutable; interpretations are not.** What Teams recorded (raw name,
+   email, role, join/leave, duration, source upload) never changes. Who that was (`person`,
+   `match_method`, `matched_at/by`) is a judgment and may be revised, always with an audit
+   entry. A correction is a new observation: add a row that supersedes the old one
+   (`AttendanceSupersession`, or `Certificate.supersedes`), never edit it.
 5. **Certificates snapshot every value they print.** Never render a certificate from live
    joins.
 6. **Nothing user-supplied is a primary key.** Internal `id` everywhere. Email, licence
-   number and name are attributes.
+   number and name are attributes. Store them as typed; match on a normalized copy.
 7. **No raw SQL string interpolation.** ORM or parameterized queries only.
 8. **Secrets come from the environment.** Never committed, never defaulted to a real value
    in code.
@@ -57,7 +60,12 @@ change.
 - Migrations are committed with the model change in the same commit.
 - Tests: pytest. Every non-negotiable above that can be tested, is.
 - One function per rule that might change (credit calculation, rounding, the evaluation
-  gate). Don't inline these.
+  gate, attendance aggregation). Don't inline these.
+- Attended time comes from `attended_minutes()`, which merges overlapping join intervals.
+  Never replace it with a sum of `duration_seconds`.
+- Staff actions (`created_by`, `uploaded_by`, `matched_by`) point at `User`. Attendee facts
+  point at `Person`.
+- Emails and domains are stored lowercased. There is no `citext`.
 
 ## How to work with me
 

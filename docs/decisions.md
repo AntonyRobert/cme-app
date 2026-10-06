@@ -50,10 +50,67 @@ looked up a colleague's number.
 Hours come from the Teams export for the whole three-session block, capped at the event's
 accredited credits.
 
+**Credit is rounded down to the nearest quarter, per event.**
+Down, because overstating credit is the error that can't be recovered from. Per event,
+because a certificate prints lines and a total, and a total that doesn't equal the sum of
+its lines makes an accreditor distrust the whole document. Accepted cost: about an eighth
+of a credit per event, roughly three credits a year for someone who attends everything.
+
+**Only time inside the event window counts.**
+Waiting-room time isn't educational activity. Each join interval is clamped to the event
+window, with five minutes' grace at the start. `actual_start_at` / `actual_end_at` on the
+event override the schedule, so a session that runs over is fixed once, not per person.
+
+**Attended time is a union of intervals, not a sum of rows.**
+Someone on a laptop who also dials in by phone produces overlapping rows. Overlaps are
+merged before summing. `duration_seconds` stays as recorded but is only summed for
+hours-only manual rows.
+
+**Observations are immutable; interpretations are not.**
+What Teams recorded never changes. Who a row belongs to is a judgment and can be revised,
+with an audit entry. Corrections are new rows linked through `AttendanceSupersession`
+(many old rows to one new row, each old row superseded at most once). Certificates use the
+same direction: the reissue carries `supersedes`.
+
+**Room-roster rows copy the join and leave times of the row they sat in.**
+A copied window is an observation about a device that really was in the meeting. The times
+can be edited for someone who walked in late, with the reason saying so.
+
+**Store what was typed, match on a normalized copy.**
+A certificate that prints a licence number different from the one on the licence is worse
+than useless. `licence_number` is as entered; `licence_number_normalized` is for matching.
+Names are never title-cased.
+
+**Presenters are many-to-many, through `SessionPresenter`.**
+Not because panels are common, but because conflict of interest is per person. The COI
+snapshot lives on the through row.
+
+**A merge re-points the duplicate's rows and moves its emails to the survivor.**
+The duplicate becomes a tombstone. If both records hold an evaluation (or presenter slot)
+for the same session, the merge is refused and the admin chooses. No automatic winner,
+because that would silently discard someone's responses. The audit entry lists everything
+moved so a wrong merge can be reversed.
+
+**Staff are `User`, attendees are `Person`.**
+Upload, match and correction fields point at the staff `User`. `AuditLog` records an
+`actor_type` and a text `actor_label` alongside nullable FKs to both, so an entry still
+names its actor after an account is renamed or removed.
+
+**Emails are lowercased on save, not `citext`.**
+Django 5.1 removed its `citext` field types, and the suggested replacement (a
+case-insensitive collation) breaks `LIKE`, which breaks admin search.
+
+**No soft-delete fields on `Person` yet.**
+Adding nullable columns later is a trivial migration. The hard part of retention is policy.
+
+**Two database roles in production.**
+An owner role runs migrations; the app role has no DDL rights and cannot update or delete
+`AuditLog`. One role locally.
+
 **Non-physicians get an attendance certificate, not a CME certificate.**
 Rounds pull in nurses, pharmacists, fellows, grad students. Same pipeline, different
 template, licence number optional. Stops people inventing a number to clear a required
-field.
+field. The certificate type is snapshotted on the certificate at issue.
 
 **Attendance is uploaded manually after each meeting.**
 26 uploads a year. Avoids needing Graph API permissions for tenant-wide meeting artifacts,
@@ -77,6 +134,25 @@ Write it as one function either way. Decide after one real cycle.
 
 **Retention period.**
 Law 25 gives a right to erasure; accreditation bodies require retention for several years.
-These pull against each other. The decision also determines whether `Person` needs
-soft-delete fields from the start, which is unpleasant to retrofit. Check what CMQ actually
-requires before committing to a number, then write it into the privacy notice.
+These pull against each other. Check what CMQ actually requires before committing to a
+number, then write it into the privacy notice.
+
+Linked to this: `AuditLog.actor_label` snapshots a username or email into an append-only
+table, so erasing a person leaves their address there. The usual answer is to pseudonymize
+the label on erasure rather than delete the row, which keeps the chain intact. That follows
+from the retention policy, so it is not built ahead of it.
+
+**Do trainees get a CME certificate?**
+Default is an attendance certificate. Royal College Section 1 credits sit inside the MOC
+program, which residents aren't enrolled in, but that reading is not authoritative.
+Confirm with McGill's CPD office before the first December issue. Understating is
+recoverable; overstating isn't.
+
+**What a re-parse does to existing rows.**
+When a fixed parser re-reads a stored export, the old rows may already carry matches,
+room-roster links and supersessions. Not designed yet. `parser_version` is recorded on
+uploads and rows so there is something to work with.
+
+**Series name.**
+`RoundsEvent.title` defaults to a `SERIES_NAME` setting. The value in settings is a
+placeholder until the real name is confirmed.
