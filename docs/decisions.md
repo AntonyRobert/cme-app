@@ -107,6 +107,23 @@ Adding nullable columns later is a trivial migration. The hard part of retention
 An owner role runs migrations; the app role has no DDL rights and cannot update or delete
 `AuditLog`. One role locally.
 
+**Multi-tenant means one instance per institution, not a tenant column.**
+If a second institution uses this, it gets the same codebase with its own database,
+process, env file and hostname. Two reasons. First, in a shared schema every query needs a
+tenant filter, and a single missed one leaks accreditation records between institutions.
+Separate databases make that leak impossible rather than unlikely. Second, institutions
+differ in accrediting body, credit rules, COI wording, certificate template and retention
+period. That is configuration per instance, not a column. The cost is that each tenant is
+a system to patch, back up and test restores for, so this holds up to about four or five
+tenants and should be revisited beyond that. Nothing is built for it yet; see
+`deployment.md`.
+
+**Staff roles are Django groups, separate from `Person.role`.**
+Coordinator, Program admin and Read only. Credit adjustments, certificate issue and
+revocation, and record merging are Program admin only, because those are the fraud
+surface: a hired coordinator must not be able to mint a certificate. `Person.role` is
+unrelated; it only decides which certificate template an attendee gets.
+
 **Non-physicians get an attendance certificate, not a CME certificate.**
 Rounds pull in nurses, pharmacists, fellows, grad students. Same pipeline, different
 template, licence number optional. Stops people inventing a number to clear a required

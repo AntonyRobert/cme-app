@@ -37,7 +37,7 @@ what matters is what guards it.
   is rotating the credential.
 - `.env.example` **is** committed, with placeholder values like `change-me`. It documents
   which variables exist without revealing any.
-- Production secrets live in `/etc/cme/env`, mode 600, owned by root, loaded by systemd as
+- Production secrets live in `/etc/cme/<org>.env`, mode 600, owned by root, loaded by systemd as
   an `EnvironmentFile`. Not in the app directory, not readable by the web user.
 - Never `print()` or log the settings object. Django's debug page redacts what it
   recognises as secret-shaped, which is not everything.
