@@ -1,0 +1,420 @@
+"""
+The admin is the whole interface at this stage, so it is tested through
+real requests against the seeded data.
+"""
+import pytest
+from django.contrib import admin
+from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
+from django.urls import reverse
+
+from attendance.aggregation import attended_minutes
+from attendance.models import AttendanceRecord, AttendanceSupersession, AttendanceUpload
+from audit.models import AuditLog
+from credits.models import CreditAdjustment, EvaluationSubmission
+from people.models import Person, PersonEmail
+from rounds.models import COIDeclaration, RoundsEvent
+
+pytestmark = pytest.mark.django_db
+
+OUR_APPS = {"accounts", "people", "rounds", "attendance", "credits", "certificates", "audit"}
+
+
+@pytest.fixture
+def seeded(settings, tmp_path):
+    settings.UPLOAD_ROOT = tmp_path
+    call_command("seed_demo", verbosity=0, allow_non_debug=True)
+    return tuple(RoundsEvent.objects.order_by("date"))
+
+
+@pytest.fixture
+def boss(client):
+    user = get_user_model().objects.create_superuser(username="boss", password="x" * 20)
+    client.force_login(user)
+    return user
+
+
+def url(model, page, *args):
+    return reverse(f"admin:{model._meta.app_label}_{model._meta.model_name}_{page}", args=args)
+
+
+def who(family):
+    return Person.objects.filter(family_name=family).order_by("created_at").first()
+
+
+# --- Every page loads --------------------------------------------------------
+
+
+def test_every_admin_page_renders(client, boss, seeded):
+    models = [m for m in admin.site._registry if m._meta.app_label in OUR_APPS]
+    assert len(models) == 13
+    for model in models:
+        model_admin = admin.site._registry[model]
+        assert client.get(url(model, "changelist")).status_code == 200, model
+        for instance in model._base_manager.all()[:3]:
+            assert client.get(url(model, "change", instance.pk)).status_code == 200, model
+        response = client.get(url(model, "add"))
+        expected = 200 if model_admin.has_add_permission(response.wsgi_request) else 403
+        assert response.status_code == expected, model
+
+
+def test_every_list_filter_and_search_works(client, boss, seeded):
+    first = seeded[0]
+    for model, query in [
+        (Person, "state=duplicates"),
+        (Person, "state=merged"),
+        (Person, "q=tremblay"),
+        (Person, "q=01234"),
+        (Person, "q=example.com"),
+        (AttendanceRecord, "matched=no"),
+        (AttendanceRecord, "active=no"),
+        (AttendanceRecord, f"event__id__exact={first.pk}&matched=no"),
+        (AttendanceRecord, "q=iphone"),
+        (AttendanceRecord, "source__exact=room_roster"),
+        (AuditLog, "q=seed-script"),
+        (AuditLog, "action=attendance.superseded"),
+        (COIDeclaration, "valid=yes"),
+        (EvaluationSubmission, "is_complete__exact=0"),
+    ]:
+        response = client.get(url(model, "changelist") + "?" + query)
+        assert response.status_code == 200, (model, query)
+        assert "e=1" not in response.headers.get("Location", ""), (model, query)
+
+
+def test_possible_duplicates_filter_finds_the_two_tremblays(client, boss, seeded):
+    response = client.get(url(Person, "changelist") + "?state=duplicates")
+    assert response.context["cl"].result_count == 2
+
+
+def test_event_page_shows_live_credit_per_person(client, boss, seeded):
+    page = client.get(url(RoundsEvent, "change", seeded[0].pk)).content.decode()
+    assert "Côté" in page and "0.75" in page
+    assert "Review: claims more than was recorded, or self-reported only" in page  # Morin
+    assert "Missing" in page  # Okafor's incomplete evaluation
+
+
+def test_person_autocomplete_never_offers_a_tombstone(client, boss, seeded):
+    main, duplicate = Person.objects.filter(family_name="Tremblay").order_by("created_at")
+    Person.objects.filter(pk=duplicate.pk).update(merged_into=main)
+    response = client.get(
+        reverse("admin:autocomplete"),
+        {"term": "tremblay", "app_label": "attendance", "model_name": "attendancerecord",
+         "field_name": "person"},
+    )
+    assert [r["id"] for r in response.json()["results"]] == [str(main.pk)]
+
+
+# --- The review queue --------------------------------------------------------
+
+
+def changelist_post(client, rows, changes):
+    """Post the editable changelist back with `changes` = {row pk: person pk}."""
+    data = {
+        "form-TOTAL_FORMS": len(rows),
+        "form-INITIAL_FORMS": len(rows),
+        "form-MIN_NUM_FORMS": 0,
+        "form-MAX_NUM_FORMS": 1000,
+        "_save": "Save",
+    }
+    for index, row in enumerate(rows):
+        data[f"form-{index}-id"] = str(row.pk)
+        person = changes.get(row.pk, row.person_id)
+        data[f"form-{index}-person"] = str(person) if person else ""
+    return data
+
+
+def test_matching_from_the_unmatched_list(client, boss, seeded):
+    second = seeded[1]
+    bouchard = who("Bouchard")
+    queue = url(AttendanceRecord, "changelist") + f"?matched=no&event__id__exact={second.pk}"
+    page = client.get(queue)
+    rows = list(page.context["cl"].result_list)
+    assert len(rows) == 3
+
+    response = client.post(queue, changelist_post(client, rows, {rows[0].pk: bouchard.pk}), follow=True)
+
+    assert response.status_code == 200
+    assert not AttendanceRecord.objects.unmatched().filter(event=second).exists()
+    assert PersonEmail.objects.get(email="lea.bouchard@hospital.example").person == bouchard
+    assert attended_minutes(bouchard, second).minutes == 66
+    entry = AuditLog.objects.filter(action="attendance.matched", actor_user=boss).first()
+    assert entry is not None
+    messages = [str(m) for m in response.context["messages"]]
+    assert any("2 other row(s)" in m for m in messages)
+
+
+def test_what_teams_recorded_cannot_be_changed_through_the_form(client, boss, seeded):
+    row = AttendanceRecord.objects.filter(source="teams_upload", person__isnull=False).first()
+    before = AttendanceRecord.objects.filter(pk=row.pk).values(*AttendanceRecord.FROZEN_FIELDS).get()
+    other = who("Roy")
+    client.post(
+        url(AttendanceRecord, "change", row.pk),
+        {
+            "person": other.pk,
+            "raw_display_name": "Tampered",
+            "duration_seconds": 99999,
+            "join_at_0": "2020-01-01",
+            "join_at_1": "00:00:00",
+            "supersedes-TOTAL_FORMS": 0,
+            "supersedes-INITIAL_FORMS": 0,
+        },
+    )
+    row.refresh_from_db()
+    assert row.person == other  # the interpretation changed
+    assert (
+        AttendanceRecord.objects.filter(pk=row.pk).values(*AttendanceRecord.FROZEN_FIELDS).get()
+        == before
+    )
+    assert AuditLog.objects.filter(action="attendance.rematched", object_id=str(row.pk)).exists()
+
+
+def test_attendance_rows_cannot_be_deleted_in_the_admin(client, boss, seeded):
+    row = AttendanceRecord.objects.first()
+    assert client.get(url(AttendanceRecord, "delete", row.pk)).status_code == 403
+    assert b"delete_selected" not in client.get(url(AttendanceRecord, "changelist")).content
+
+
+# --- Adding rows by hand -----------------------------------------------------
+
+
+def manual_form(event, person, **fields):
+    data = {
+        "event": event.pk,
+        "source": "manual",
+        "person": person.pk,
+        "attributed_to": "",
+        "join_at_0": "",
+        "join_at_1": "",
+        "leave_at_0": "",
+        "leave_at_1": "",
+        "duration_minutes": "",
+        "reason": "Chair confirms attendance",
+        "supersedes-TOTAL_FORMS": 0,
+        "supersedes-INITIAL_FORMS": 0,
+        "supersedes-MIN_NUM_FORMS": 0,
+        "supersedes-MAX_NUM_FORMS": 1000,
+    }
+    data.update(fields)
+    return data
+
+
+def test_adding_an_hours_only_manual_row(client, boss, seeded):
+    first = seeded[0]
+    roy = who("Roy")
+    response = client.post(
+        url(AttendanceRecord, "add"), manual_form(first, roy, duration_minutes="20")
+    )
+    assert response.status_code == 302, response.context["adminform"].form.errors
+    row = AttendanceRecord.objects.filter(person=roy, source="manual").get()
+    assert (row.duration_seconds, row.join_at, row.created_by) == (20 * 60, None, boss)
+    assert (row.match_method, row.matched_by) == ("manual", boss)
+    assert AuditLog.objects.filter(
+        action="attendance.manual_row_created", object_id=str(row.pk), actor_user=boss
+    ).exists()
+
+
+def test_a_manual_row_needs_a_reason_and_a_duration(client, boss, seeded):
+    first = seeded[0]
+    roy = who("Roy")
+    count = AttendanceRecord.objects.count()
+    for bad in (
+        manual_form(first, roy, duration_minutes="20", reason=""),
+        manual_form(first, roy),
+        manual_form(first, roy, duration_minutes="20", join_at_0="2026-09-15", join_at_1="12:00:00",
+                    leave_at_0="2026-09-15", leave_at_1="12:30:00"),
+        manual_form(first, roy, source="teams_upload", duration_minutes="20"),
+    ):
+        response = client.post(url(AttendanceRecord, "add"), bad)
+        assert response.status_code == 200  # redisplayed with errors, not a crash
+        assert response.context["adminform"].form.errors
+    assert AttendanceRecord.objects.count() == count
+
+
+def test_adding_a_room_roster_row_copies_the_device_times(client, boss, seeded):
+    first = seeded[0]
+    device = AttendanceRecord.objects.get(event=first, raw_display_name="Conference Room B")
+    morin = who("Morin")
+    response = client.post(
+        url(AttendanceRecord, "add"),
+        manual_form(first, morin, source="room_roster", attributed_to=device.pk,
+                    reason="On the Room B sheet"),
+    )
+    assert response.status_code == 302, response.context["adminform"].form.errors
+    row = AttendanceRecord.objects.get(person=morin, source="room_roster")
+    assert (row.join_at, row.leave_at) == (device.join_at, device.leave_at)
+    assert attended_minutes(morin, first).minutes == 58
+
+
+def test_a_correction_added_in_the_admin_replaces_the_rows_it_names(client, boss, seeded):
+    first = seeded[0]
+    cote = who("Côté")
+    rejoins = list(AttendanceRecord.objects.filter(event=first, person=cote))
+    assert attended_minutes(cote, first).minutes == 57
+    data = manual_form(first, cote, duration_minutes="60", reason="Teams dropped him twice")
+    data["supersedes-TOTAL_FORMS"] = len(rejoins)
+    for index, old in enumerate(rejoins):
+        data[f"supersedes-{index}-old"] = str(old.pk)
+    response = client.post(url(AttendanceRecord, "add"), data)
+    assert response.status_code == 302, response.context["adminform"].form.errors
+    assert AttendanceSupersession.objects.filter(old__in=rejoins, created_by=boss).count() == 3
+    assert attended_minutes(cote, first).minutes == 60
+    assert AuditLog.objects.filter(action="attendance.superseded", actor_user=boss).count() == 1
+
+
+def test_a_row_already_superseded_cannot_be_replaced_again(client, boss, seeded):
+    first = seeded[0]
+    sharma = who("Sharma")
+    old = AttendanceRecord.objects.superseded().filter(person=sharma).first()
+    data = manual_form(first, sharma, duration_minutes="60")
+    data["supersedes-TOTAL_FORMS"] = 1
+    data["supersedes-0-old"] = str(old.pk)
+    response = client.post(url(AttendanceRecord, "add"), data)
+    assert response.status_code == 200
+    assert AttendanceSupersession.objects.filter(old=old).count() == 1
+
+
+# --- Uploads, adjustments, declarations --------------------------------------
+
+
+def test_uploading_an_export_stores_it_and_refuses_it_twice(client, boss, seeded, settings):
+    first = seeded[0]
+    content = b"Meeting Summary\r\nsynthetic test bytes\r\n"
+
+    def post():
+        return client.post(
+            url(AttendanceUpload, "add"),
+            {"event": first.pk, "file": SimpleUploadedFile("export.csv", content)},
+        )
+
+    assert post().status_code == 302
+    upload = AttendanceUpload.objects.get(original_filename="export.csv")
+    assert upload.uploaded_by == boss
+    assert (settings.UPLOAD_ROOT / upload.stored_path).read_bytes() == content
+    again = post()
+    assert again.status_code == 200
+    assert "already uploaded" in str(again.context["adminform"].form.errors)
+    assert client.get(url(AttendanceUpload, "change", upload.pk)).status_code == 200
+    assert client.get(url(AttendanceUpload, "delete", upload.pk)).status_code == 403
+
+
+def test_a_credit_adjustment_records_who_and_why_and_is_then_frozen(client, boss, seeded):
+    first = seeded[0]
+    roy = who("Roy")
+    response = client.post(
+        url(CreditAdjustment, "add"),
+        {"person": roy.pk, "event": first.pk, "delta_credits": "0.50", "reason": "Chair approved"},
+    )
+    assert response.status_code == 302, response.context["adminform"].form.errors
+    adjustment = CreditAdjustment.objects.get(person=roy)
+    assert adjustment.created_by == boss
+    assert AuditLog.objects.filter(
+        action="credit.adjusted", object_id=str(adjustment.pk), actor_user=boss
+    ).exists()
+    client.post(
+        url(CreditAdjustment, "change", adjustment.pk),
+        {"person": roy.pk, "event": first.pk, "delta_credits": "9.00", "reason": "edited"},
+    )
+    adjustment.refresh_from_db()
+    assert str(adjustment.delta_credits) == "0.50"
+    bad = client.post(
+        url(CreditAdjustment, "add"),
+        {"person": roy.pk, "event": first.pk, "delta_credits": "0.10", "reason": "odd amount"},
+    )
+    assert bad.status_code == 200 and bad.context["adminform"].form.errors
+
+
+def test_a_declaration_entered_by_staff_is_logged_and_cannot_be_edited(client, boss, seeded):
+    haddad = who("Haddad")
+    response = client.post(
+        url(COIDeclaration, "add"),
+        {
+            "person": haddad.pk,
+            "details": "",
+            "declared_at_0": "2026-10-01",
+            "declared_at_1": "09:00:00",
+            "valid_until": "2027-06-30",
+            "disclosure_text_version": "2026-1",
+        },
+    )
+    assert response.status_code == 302, response.context["adminform"].form.errors
+    declaration = COIDeclaration.objects.get(person=haddad)
+    assert AuditLog.objects.filter(action="coi.declared", actor_user=boss).exists()
+    client.post(url(COIDeclaration, "change", declaration.pk), {"has_conflict": "on", "details": "x"})
+    declaration.refresh_from_db()
+    assert declaration.has_conflict is False
+
+
+def test_a_duplicate_licence_is_reported_on_the_form(client, boss, seeded):
+    response = client.post(
+        url(Person, "add"),
+        {
+            "given_name": "M.",
+            "family_name": "Tremblay",
+            "role": "physician",
+            "credential": "MD",
+            "licence_jurisdiction": "CMQ",
+            "licence_number": " 1234",  # same as 01234 once normalized
+            "emails-TOTAL_FORMS": 0,
+            "emails-INITIAL_FORMS": 0,
+        },
+    )
+    assert response.status_code == 200
+    assert "licence_number" in response.context["adminform"].form.errors
+
+
+# --- Merging -----------------------------------------------------------------
+
+
+def merge_post(client, people, **extra):
+    data = {"action": "merge_selected", "_selected_action": [str(p.pk) for p in people]}
+    data.update(extra)
+    return client.post(url(Person, "changelist"), data, follow=True)
+
+
+def test_merge_shows_both_records_then_merges_on_confirmation(client, boss, seeded):
+    main, duplicate = Person.objects.filter(family_name="Tremblay").order_by("created_at")
+
+    page = merge_post(client, [main, duplicate])
+    text = page.content.decode()
+    assert "Merge two people" in text
+    assert "m.tremblay@example.com" in text and "marie.tremblay@example.org" in text
+    duplicate.refresh_from_db()
+    assert duplicate.merged_into is None  # nothing happens without confirmation
+
+    done = merge_post(client, [main, duplicate], confirm="1", survivor=str(main.pk))
+    duplicate.refresh_from_db()
+    assert duplicate.merged_into == main
+    assert set(main.emails.values_list("email", flat=True)) == {
+        "marie.tremblay@example.org",
+        "m.tremblay@example.com",
+    }
+    assert AuditLog.objects.filter(action="person.merged", actor_user=boss).count() == 1
+    assert any("Merged into" in str(m) for m in done.context["messages"])
+
+
+def test_merge_needs_exactly_two_people(client, boss, seeded):
+    people = list(Person.objects.all()[:3])
+    page = merge_post(client, people, confirm="1", survivor=str(people[0].pk))
+    assert any("exactly two" in str(m) for m in page.context["messages"])
+    assert not Person.objects.filter(merged_into__isnull=False).exists()
+
+
+def test_merge_with_a_collision_is_refused_and_shows_both_rows(client, boss, seeded):
+    main, duplicate = Person.objects.filter(family_name="Tremblay").order_by("created_at")
+    theirs = EvaluationSubmission.objects.filter(person=main, session__event=seeded[1]).get()
+    EvaluationSubmission.objects.create(
+        person=duplicate, session=theirs.session, self_reported_minutes=70, attestation=True
+    )
+    page = merge_post(client, [main, duplicate], confirm="1", survivor=str(main.pk))
+    text = page.content.decode()
+    assert "This merge cannot go ahead yet" in text
+    assert text.count(reverse("admin:credits_evaluationsubmission_changelist")) >= 2
+    duplicate.refresh_from_db()
+    assert duplicate.merged_into is None
+    assert (
+        EvaluationSubmission.objects.filter(
+            session=theirs.session, person__in=[main, duplicate]
+        ).count()
+        == 2
+    )
