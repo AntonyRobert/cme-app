@@ -1,0 +1,7 @@
+# Local development and tests. Never installed on the server.
+-r requirements.txt
+
+pytest==9.1.1
+pytest-django==4.14.0
+# Loads .env in dev only. Production reads the systemd EnvironmentFile.
+python-dotenv==1.2.4

@@ -1,0 +1,7 @@
+# What the server installs. Direct dependencies only, pinned exactly;
+# Dependabot proposes the bumps.
+
+# 5.2 is the LTS line (supported to April 2028). Do not move to 6.x.
+Django==5.2.18
+psycopg[binary]==3.3.6
+gunicorn==26.2.0
