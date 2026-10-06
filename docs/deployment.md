@@ -80,7 +80,10 @@ Two things this sketch does not handle yet. Fix both when the script is actually
 
 - **Database roles.** Production has two: an owner role that runs `migrate`, and the app
   role gunicorn uses, which has no DDL rights and no UPDATE or DELETE on the audit table.
-  The `migrate` line has to run with the owner role's credentials.
+  With peer authentication a role is selected by the OS user, not a credential, so the
+  `migrate` line has to run as the owner's OS user (`sudo -u <owner> ...`) and gunicorn as
+  the app user. `prod.py` leaves `USER` empty so each process connects as whoever runs it.
+  New tables created by a migration also need their grants given to the app role.
 - **Environment.** `manage.py` run from a shell does not see the systemd
   `EnvironmentFile`. The script has to load `/etc/cme/env` itself, including
   `DJANGO_SETTINGS_MODULE=config.settings.prod`, or `manage.py` falls back to dev settings

@@ -1,10 +1,17 @@
 """Production. Everything here is required by docs/security-baseline.md."""
 from .base import *  # noqa: F401,F403
-from .base import env
+from .base import DATABASES, env
 
 DEBUG = False
 ALLOWED_HOSTS = [h.strip() for h in env("DJANGO_ALLOWED_HOSTS").split(",") if h.strip()]
 CSRF_TRUSTED_ORIGINS = [f"https://{host}" for host in ALLOWED_HOSTS]
+
+# Peer authentication over the Unix socket: no HOST, no PASSWORD. Postgres
+# trusts the OS user, so there is no database secret to protect.
+# USER is left empty unless set, which makes psycopg connect as the OS user
+# running the process. gunicorn runs as the app user and gets the app role;
+# migrate runs as the owner user and gets the owner role.
+DATABASES["default"]["USER"] = env("DATABASE_USER", "")
 
 # Caddy terminates TLS and forwards plain HTTP to gunicorn with this header.
 # Without it Django can't tell the request was HTTPS and the redirect loops.

@@ -22,9 +22,50 @@ certificates have real-world value.
   `SECURE_HSTS_SECONDS`, `SESSION_COOKIE_HTTPONLY`, `SESSION_COOKIE_SAMESITE = 'Lax'`.
 - CSRF protection on every POST. Don't exempt views to make something work.
 - ORM or parameterized queries. No f-strings in SQL.
-- Secrets in a systemd `EnvironmentFile`, mode 600. `.env` in `.gitignore` before the first
-  commit.
-- Least-privileged database role. The app does not need DROP or schema rights.
+- Least-privileged database role. The app does not need DROP or schema rights. Two roles in
+  production: an owner that runs `migrate`, and an app role with no DDL and no
+  UPDATE/DELETE on `AuditLog`.
+
+### Secrets
+
+The rule is **never in version control, never in code, never in a log**. On disk, in a file
+only the right user can read, is correct and normal. The credential has to exist somewhere;
+what matters is what guards it.
+
+- `.env` in `.gitignore` **before the first commit**. Once a secret is pushed, removing the
+  line doesn't help — it is in the history and, on GitHub, has been crawled. The only fix
+  is rotating the credential.
+- `.env.example` **is** committed, with placeholder values like `change-me`. It documents
+  which variables exist without revealing any.
+- Production secrets live in `/etc/cme/env`, mode 600, owned by root, loaded by systemd as
+  an `EnvironmentFile`. Not in the app directory, not readable by the web user.
+- Never `print()` or log the settings object. Django's debug page redacts what it
+  recognises as secret-shaped, which is not everything.
+
+### Eliminate the database password in production
+
+Postgres runs on the same box as the app, so there is no need for a password at all.
+Connect over the Unix socket with **peer authentication**: Postgres trusts the OS user
+identity instead of a credential.
+
+- App runs as the `cme` system user; Postgres has a `cme` role with the same name.
+- `pg_hba.conf`: `local all cme peer`.
+- Django `DATABASES`: no `HOST`, no `PASSWORD`, `NAME` and `USER` only. An empty `HOST`
+  makes psycopg use the socket.
+
+Removing a secret beats protecting one. Keep `local all all peer` as the default and do not
+open `host` lines for `127.0.0.1` unless something genuinely needs TCP.
+
+Locally on Windows, peer authentication isn't available, so dev keeps a password in `.env`.
+That is the only place a database password should appear.
+
+`SECRET_KEY` cannot be eliminated this way and stays in the env file.
+
+### Secrets managers
+
+AWS Secrets Manager and Parameter Store are the right answer at scale and remain an option
+later. For one VM they add a dependency, a cost and a failure mode, to protect a credential
+peer authentication has already removed. Not now.
 
 ### Magic link auth
 
