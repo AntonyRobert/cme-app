@@ -22,7 +22,6 @@ pgpass.conf
 # Raw Teams exports, generated certificates, and anything a user uploaded.
 /uploads/
 /media/
-/certificates/
 *.pdf
 # Teams attendance exports arrive as .csv or .xlsx. Test fixtures must be
 # synthetic and live under tests/fixtures/, which is explicitly re-included.

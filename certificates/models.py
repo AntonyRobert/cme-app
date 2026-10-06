@@ -1,0 +1,153 @@
+from django.conf import settings
+from django.core.validators import MinValueValidator
+from django.db import models
+from django.db.models import F, Q
+from django.utils import timezone
+
+from attendance.aggregation import MinutesSource
+from core.models import AppendOnlyMixin, FrozenFieldsMixin, UUIDModel
+from people.models import Person
+from people.ownership import PersonOwnedQuerySet
+from rounds.models import RoundsEvent
+
+from .rules import ATTENDANCE, CME, generate_verification_code
+
+
+class Certificate(FrozenFieldsMixin, UUIDModel):
+    """
+    An issued certificate: a snapshot, not a view.
+
+    Every value the PDF prints is copied here at issue and never read from
+    live data again. A mistake is fixed by issuing a new certificate whose
+    `supersedes` points at this one. Only revocation changes a row.
+    """
+
+    class Type(models.TextChoices):
+        CME = CME, "CME credit certificate"
+        ATTENDANCE = ATTENDANCE, "Attendance certificate"
+
+    FROZEN_FIELDS = (
+        "certificate_type",
+        "period_start",
+        "period_end",
+        "total_credits",
+        "recipient_name",
+        "recipient_credential",
+        "licence_number",
+        "licence_jurisdiction",
+        "verification_code",
+        "template_version",
+        "pdf_sha256",
+        "issued_at",
+        "issued_by",
+        "supersedes",
+    )
+
+    person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="certificates")
+    certificate_type = models.CharField(max_length=20, choices=Type.choices)
+    period_start = models.DateField()
+    period_end = models.DateField()
+    total_credits = models.DecimalField(
+        max_digits=6, decimal_places=2, validators=[MinValueValidator(0)]
+    )
+    recipient_name = models.CharField(max_length=400)
+    recipient_credential = models.CharField(max_length=50, blank=True)
+    # As the person entered it, never the normalized form.
+    licence_number = models.CharField(max_length=50, blank=True)
+    licence_jurisdiction = models.CharField(max_length=10, blank=True)
+    verification_code = models.CharField(
+        max_length=20, unique=True, default=generate_verification_code
+    )
+    template_version = models.CharField(max_length=50)
+    pdf_sha256 = models.CharField(max_length=64, blank=True)
+    issued_at = models.DateTimeField(default=timezone.now)
+    issued_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+"
+    )
+    supersedes = models.OneToOneField(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="superseded_by",
+        help_text="The certificate this one replaces.",
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_reason = models.TextField(blank=True)
+
+    objects = PersonOwnedQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["-issued_at"]
+        permissions = [
+            ("issue_certificate", "Can issue certificates"),
+            ("revoke_certificate", "Can revoke certificates"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(period_end__gte=F("period_start")), name="certificate_period_in_order"
+            ),
+            models.CheckConstraint(
+                condition=Q(total_credits__gte=0), name="certificate_total_not_negative"
+            ),
+            models.CheckConstraint(
+                condition=Q(revoked_at__isnull=True, revoked_reason="")
+                | (Q(revoked_at__isnull=False) & ~Q(revoked_reason="")),
+                name="certificate_revocation_has_reason",
+            ),
+            models.CheckConstraint(
+                condition=Q(supersedes__isnull=True) | ~Q(supersedes=F("id")),
+                name="certificate_does_not_supersede_itself",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.verification_code} {self.recipient_name}"
+
+    @property
+    def is_revoked(self):
+        return self.revoked_at is not None
+
+    @property
+    def is_superseded(self):
+        return hasattr(self, "superseded_by")
+
+
+class CertificateLineQuerySet(PersonOwnedQuerySet):
+    person_lookup = "certificate__person"
+
+
+class CertificateLine(AppendOnlyMixin, UUIDModel):
+    """
+    One event on a certificate, with everything behind its credit figure.
+
+    Credit is per event, so there is one line per event. `event` is kept for
+    traceability only: nothing printed is read through it.
+    """
+
+    certificate = models.ForeignKey(Certificate, on_delete=models.PROTECT, related_name="lines")
+    event = models.ForeignKey(RoundsEvent, on_delete=models.PROTECT, related_name="+")
+    event_title = models.CharField(max_length=200)
+    event_date = models.DateField()
+    session_titles = models.JSONField(default=list, help_text="Print-only snapshot.")
+    attended_minutes = models.PositiveIntegerField()
+    minutes_source = models.CharField(max_length=20, choices=MinutesSource.choices)
+    computed_credits = models.DecimalField(max_digits=5, decimal_places=2)
+    adjustment_credits = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    credits = models.DecimalField(max_digits=5, decimal_places=2)
+
+    objects = CertificateLineQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["certificate", "event_date"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["certificate", "event"], name="certificateline_one_per_event"
+            ),
+            models.CheckConstraint(
+                condition=Q(credits__gte=0), name="certificateline_credits_not_negative"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.event_date} {self.event_title}: {self.credits}"

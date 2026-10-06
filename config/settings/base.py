@@ -44,6 +44,8 @@ INSTALLED_APPS = [
     "rounds",
     "attendance",
     "credits",
+    "certificates",
+    "audit",
 ]
 
 # Staff accounts. Must be set before the first migration and never changed.
