@@ -17,7 +17,7 @@ from .models import CreditAdjustment, EvaluationSubmission
 
 ZERO = Decimal("0.00")
 
-# Recorded and self-reported minutes further apart than this get a human look.
+# A self-report this much higher than the recorded minutes gets a human look.
 REVIEW_THRESHOLD_MINUTES = 15
 
 
@@ -77,14 +77,19 @@ def creditable_minutes(person, event):
     attendance rows at all (their connection died, or they phoned in under
     a name nobody could match).
 
-    needs_review is set when the two disagree by more than
-    REVIEW_THRESHOLD_MINUTES, and whenever credit rests on a self-report
-    alone, so a person never gets credit from an unchecked claim silently.
+    needs_review is set when the person claims more than was recorded, by
+    more than REVIEW_THRESHOLD_MINUTES: that is the sign of a missing or
+    unmatched attendance row. Claiming less is not flagged, because a
+    person who evaluated one session of three has only reported on that
+    one. It is also set whenever credit rests on a self-report alone, so
+    nobody gets credit from an unchecked claim silently.
     """
     recorded = attended_minutes(person, event)
     claimed = self_reported_minutes(person, event)
     if recorded.has_rows:
-        diverges = claimed is not None and abs(claimed - recorded.minutes) > REVIEW_THRESHOLD_MINUTES
+        diverges = (
+            claimed is not None and claimed - recorded.minutes > REVIEW_THRESHOLD_MINUTES
+        )
         return CreditableTime(
             minutes=recorded.minutes,
             source=recorded.source,

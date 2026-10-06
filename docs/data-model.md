@@ -365,9 +365,12 @@ self-report fallback sits one layer up, in `credits.rules.creditable_minutes(per
 event)`, because evaluations belong to the credits app. When the person has no active rows
 at all, it falls back to the sum of `self_reported_minutes` across their submissions for
 the event's sessions, capped at the window length, with source `self_reported`. Credit
-resting on a self-report alone is always flagged for review. When both exist and differ by
-more than 15 minutes, the person is flagged for review rather than one being silently
-picked. Recorded minutes still win, even when they add up to zero.
+resting on a self-report alone is always flagged for review. When both exist and the
+person claims more than was recorded, by more than 15 minutes, they are flagged for review
+rather than one figure being silently picked. Claiming less is not flagged: self-reports
+are per session and recorded minutes are for the whole event, so someone who evaluated one
+session of three has simply reported on that one. Recorded minutes still win, even when
+they add up to zero.
 
 The docstring repeats step 2 in plain words. Someone will try to "optimize" this back into
 a `SUM(duration_seconds)`, and that would be wrong.

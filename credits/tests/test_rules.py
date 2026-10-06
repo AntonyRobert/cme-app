@@ -242,12 +242,19 @@ def test_recorded_zero_is_not_replaced_by_the_self_report(event, person):
 
 @pytest.mark.parametrize(
     "recorded, claimed, flagged",
-    [(60, 60, False), (45, 60, False), (60, 45, False), (44, 60, True), (60, 44, True)],
+    [(60, 60, False), (45, 60, False), (44, 60, True), (10, 60, True), (60, 44, False)],
 )
-def test_divergence_of_more_than_15_minutes_is_flagged(event, person, recorded, claimed, flagged):
+def test_claiming_over_15_minutes_more_than_was_recorded_is_flagged(event, person, recorded, claimed, flagged):
     teams_row(event, person, 0, recorded)
     evaluate(person, sessions(event)[0], minutes=claimed)
     assert creditable_minutes(person, event).needs_review is flagged
+
+
+def test_evaluating_one_session_of_three_is_not_a_discrepancy(event, person):
+    """Self-reports are per session; recorded minutes are for the whole event."""
+    teams_row(event, person, 0, 60)
+    evaluate(person, sessions(event)[0], minutes=20)
+    assert creditable_minutes(person, event).needs_review is False
 
 
 def test_attendance_without_any_evaluation_is_not_flagged(event, person):
