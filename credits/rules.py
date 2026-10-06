@@ -20,6 +20,10 @@ ZERO = Decimal("0.00")
 # A self-report this much higher than the recorded minutes gets a human look.
 REVIEW_THRESHOLD_MINUTES = 15
 
+REVIEW_CLAIMS_MORE = "claims more than was recorded"
+REVIEW_SELF_REPORTED_ONLY = "self-reported only"
+REVIEW_OVER_EVENT_LENGTH = "rows add up to more than the event lasted (duplicate manual row?)"
+
 
 def round_credits(hours):
     """
@@ -56,7 +60,11 @@ class CreditableTime:
     source: str | None  # a MinutesSource value; None when there is nothing at all
     recorded_minutes: int | None  # None when there are no attendance rows
     self_reported_minutes: int | None  # None when there are no evaluations
-    needs_review: bool
+    review_reasons: tuple = ()  # why a human should look; empty when fine
+
+    @property
+    def needs_review(self):
+        return bool(self.review_reasons)
 
 
 def self_reported_minutes(person, event):
@@ -82,31 +90,32 @@ def creditable_minutes(person, event):
     unmatched attendance row. Claiming less is not flagged, because a
     person who evaluated one session of three has only reported on that
     one. It is also set whenever credit rests on a self-report alone, so
-    nobody gets credit from an unchecked claim silently.
+    nobody gets credit from an unchecked claim silently, and when hours-only
+    rows added up to more than the event lasted.
     """
     recorded = attended_minutes(person, event)
     claimed = self_reported_minutes(person, event)
     if recorded.has_rows:
-        diverges = (
-            claimed is not None and claimed - recorded.minutes > REVIEW_THRESHOLD_MINUTES
-        )
+        reasons = []
+        if claimed is not None and claimed - recorded.minutes > REVIEW_THRESHOLD_MINUTES:
+            reasons.append(REVIEW_CLAIMS_MORE)
+        if recorded.capped_seconds:
+            reasons.append(REVIEW_OVER_EVENT_LENGTH)
         return CreditableTime(
             minutes=recorded.minutes,
             source=recorded.source,
             recorded_minutes=recorded.minutes,
             self_reported_minutes=claimed,
-            needs_review=diverges,
+            review_reasons=tuple(reasons),
         )
     if claimed is None:
-        return CreditableTime(0, None, None, None, False)
-    window_start, window_end = event.credit_window()
-    window_minutes = int((window_end - window_start).total_seconds()) // 60
+        return CreditableTime(0, None, None, None)
     return CreditableTime(
-        minutes=min(claimed, window_minutes),
+        minutes=min(claimed, event.length_seconds // 60),
         source=MinutesSource.SELF_REPORTED,
         recorded_minutes=None,
         self_reported_minutes=claimed,
-        needs_review=True,
+        review_reasons=(REVIEW_SELF_REPORTED_ONLY,),
     )
 
 

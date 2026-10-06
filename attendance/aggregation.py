@@ -4,11 +4,15 @@ How long someone attended an event.
 attended_minutes() is the single place attendance is added up. Nothing
 else may sum AttendanceRecord rows.
 """
+import logging
 from dataclasses import dataclass
 
 from django.db import models
 
 from .models import AttendanceRecord
+
+
+logger = logging.getLogger(__name__)
 
 
 class MinutesSource(models.TextChoices):
@@ -23,6 +27,9 @@ class AttendedTime:
     seconds: int
     source: str | None  # None when the person has no active rows at all
     row_count: int
+    # Seconds cut off because hours-only rows pushed the total past the
+    # event's length. Not zero usually means a duplicate manual row.
+    capped_seconds: int = 0
 
     @property
     def minutes(self):
@@ -73,8 +80,12 @@ def attended_minutes(person, event):
        each to the event's credit window, then take the UNION of the
        intervals. duration_seconds is ignored for these rows.
     3. Rows without times (manual hours-only rows): add duration_seconds
-       on top.
-    4. Cap the total at the length of the credit window.
+       on top. These are added, never merged: they have no interval.
+    4. Cap the total at the event's own length (start to end, without the
+       grace before the start). Nobody attends for longer than the event
+       lasted, and this is the figure a certificate prints. When
+       hours-only rows are what pushed the total over, that is logged and
+       reported in capped_seconds.
 
     Self-reported minutes are not considered here; see
     credits.rules.creditable_minutes for that fallback.
@@ -99,8 +110,22 @@ def attended_minutes(person, event):
         else:
             untimed_seconds += duration_seconds
 
-    window_seconds = int((window_end - window_start).total_seconds())
-    seconds = min(merged_seconds(intervals) + untimed_seconds, window_seconds)
+    event_seconds = event.length_seconds
+    # Joining early can make up for leaving early, but not exceed the event.
+    timed_seconds = min(merged_seconds(intervals), event_seconds)
+    seconds = min(timed_seconds + untimed_seconds, event_seconds)
+    capped_seconds = timed_seconds + untimed_seconds - seconds
+    if capped_seconds:
+        logger.warning(
+            "Attendance capped at the event length: person=%s event=%s rows=%s "
+            "timed=%ss hours_only=%ss event=%ss. Probably a duplicate manual row.",
+            person.pk,
+            event.pk,
+            row_count,
+            timed_seconds,
+            untimed_seconds,
+            event_seconds,
+        )
 
     if not sources:
         source = None
@@ -110,4 +135,6 @@ def attended_minutes(person, event):
         source = MinutesSource.MIXED
     else:
         source = MinutesSource.MANUAL
-    return AttendedTime(seconds=seconds, source=source, row_count=row_count)
+    return AttendedTime(
+        seconds=seconds, source=source, row_count=row_count, capped_seconds=capped_seconds
+    )

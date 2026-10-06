@@ -124,7 +124,7 @@ class RoundsEventAdmin(BaseAdmin):
                     if b.adjustment_credits
                     else b.computed_credits,
                     b.credits,
-                    "Review: claims more than was recorded, or self-reported only" if b.time.needs_review else "",
+                    "Review: " + "; ".join(b.time.review_reasons) if b.time.needs_review else "",
                 )
                 for person, b in rows
             ),

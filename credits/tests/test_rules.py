@@ -229,7 +229,7 @@ def test_self_report_is_the_fallback_when_there_is_no_attendance_row(event, pers
 
 def test_self_report_cannot_exceed_the_event(event, person):
     evaluate(person, sessions(event)[0], minutes=600)
-    assert creditable_minutes(person, event).minutes == 65  # the credit window
+    assert creditable_minutes(person, event).minutes == 60  # the event's length
 
 
 def test_recorded_zero_is_not_replaced_by_the_self_report(event, person):
@@ -255,6 +255,18 @@ def test_evaluating_one_session_of_three_is_not_a_discrepancy(event, person):
     teams_row(event, person, 0, 60)
     evaluate(person, sessions(event)[0], minutes=20)
     assert creditable_minutes(person, event).needs_review is False
+
+
+def test_rows_adding_up_to_more_than_the_event_are_flagged(event, person):
+    teams_row(event, person, 0, 60)
+    manual_row(event, person, minutes=30, reason="Entered twice by mistake")
+    evaluate(person, sessions(event)[0])
+    time = creditable_minutes(person, event)
+    assert time.minutes == 60
+    assert time.review_reasons == (
+        "rows add up to more than the event lasted (duplicate manual row?)",
+    )
+    assert event_credits(person, event) == D("1.00")
 
 
 def test_attendance_without_any_evaluation_is_not_flagged(event, person):

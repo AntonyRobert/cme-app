@@ -2,8 +2,11 @@
 attended_minutes(): the piece most likely to be subtly wrong.
 
 Times in these tests are minutes after the scheduled start of a 60-minute
-event, so the credit window is -5 to 60.
+event. Time counts from -5 (five minutes of grace) to 60, and the total can
+never exceed the event's own 60 minutes.
 """
+import logging
+
 import datetime
 
 import pytest
@@ -72,6 +75,16 @@ def test_rejoin_rows_are_added_together(event, person):
     assert minutes(person, event) == 60
 
 
+def test_the_gap_between_two_rows_is_not_counted(event, person):
+    """
+    0-20 and 30-50 is 40 minutes, not 50. An implementation that "merges"
+    by taking earliest join to latest leave would count the gap.
+    """
+    teams_row(event, person, 0, 20)
+    teams_row(event, person, 30, 50)
+    assert minutes(person, event) == 40
+
+
 def test_time_between_rejoins_is_not_attended(event, person):
     teams_row(event, person, 0, 10)
     teams_row(event, person, 20, 30)
@@ -80,9 +93,24 @@ def test_time_between_rejoins_is_not_attended(event, person):
 
 
 def test_laptop_and_phone_at_once_are_not_counted_twice(event, person):
+    """
+    On a laptop for 40 minutes, with a phone also connected for 20 of them.
+    That is 40 minutes of attendance, not 60.
+
+    Deliberately shorter than the event: if the right answer were the full
+    60 minutes, a naive sum would be capped to 60 and pass by accident.
+    """
+    teams_row(event, person, 0, 40, raw_display_name="laptop")
+    teams_row(event, person, 10, 30, raw_display_name="phone")
+    assert minutes(person, event) == 40
+
+
+def test_laptop_and_phone_at_once_for_the_whole_event(event, person):
     teams_row(event, person, 0, 60, raw_display_name="laptop")
     teams_row(event, person, 10, 50, raw_display_name="phone")
-    assert minutes(person, event) == 60
+    result = attended_minutes(person, event)
+    assert result.minutes == 60
+    assert result.capped_seconds == 0  # two connections are not a reason to warn
 
 
 def test_partly_overlapping_connections(event, person):
@@ -108,9 +136,34 @@ def test_seconds_round_down_to_whole_minutes(event, person):
 # --- The credit window -------------------------------------------------------
 
 
+def test_joining_three_minutes_early_counts_from_when_they_joined(event, person):
+    """Inside the five-minute grace, the early minutes count."""
+    teams_row(event, person, -3, 50)
+    assert minutes(person, event) == 53
+
+
+def test_joining_exactly_at_the_grace_boundary(event, person):
+    teams_row(event, person, -5, 50)
+    assert minutes(person, event) == 55
+
+
+def test_joining_twenty_minutes_early_does_not_earn_waiting_room_time(event, person):
+    """Clamped to the start of the grace period: 5 early minutes, not 20."""
+    teams_row(event, person, -20, 50)
+    assert minutes(person, event) == 55
+
+
 def test_waiting_before_the_start_only_counts_for_the_grace_period(event, person):
     teams_row(event, person, -20, 30)
     assert minutes(person, event) == 35  # 5 minutes of grace + 30
+
+
+def test_grace_minutes_cannot_push_the_total_past_the_event_length(event, person):
+    """Early by five and there to the end is the full hour, not 65 minutes."""
+    teams_row(event, person, -5, 60)
+    result = attended_minutes(person, event)
+    assert result.minutes == 60
+    assert result.capped_seconds == 0  # ordinary, not worth a warning
 
 
 def test_staying_after_the_end_does_not_count(event, person):
@@ -134,14 +187,65 @@ def test_actual_end_time_extends_the_window_for_everyone(event, person):
     assert minutes(person, event) == 80
 
 
+def test_time_past_actual_end_is_cut_off_there(event, person):
+    """Rounds ran over to 80 minutes; they stayed connected until 95."""
+    event.actual_end_at = at(80)
+    event.save()
+    teams_row(event, person, 0, 95)
+    assert minutes(person, event) == 80
+
+
+def test_time_past_an_early_actual_end_is_cut_off_too(event, person):
+    """Rounds ended at 50 minutes; Teams kept the room open to the hour."""
+    event.actual_end_at = at(50)
+    event.save()
+    teams_row(event, person, 0, 60)
+    assert minutes(person, event) == 50
+
+
+def test_laptop_and_phone_both_running_past_actual_end(event, person):
+    """
+    Pins that each interval is clamped to the window AND the intervals are
+    merged, rather than the total merely being capped afterwards.
+
+    Joined 20 minutes late on a laptop (20-90) and a phone (30-85); rounds
+    ended at 70. The right answer is 50: 20 to 70, once.
+
+    The late join is what makes this test discriminate. Each shortcut gives
+    a different wrong number:
+      - merge without clamping:            70  (20 to 90)
+      - clamp, then sum instead of merge:  70  (50 + 40 = 90, capped at 70)
+      - sum raw rows, then cap:            70
+    If they had joined at 0, the right answer would also be 70 and every
+    one of those would pass for the wrong reason.
+    """
+    event.actual_end_at = at(70)
+    event.save()
+    teams_row(event, person, 20, 90, raw_display_name="laptop")
+    teams_row(event, person, 30, 85, raw_display_name="phone")
+    assert minutes(person, event) == 50
+
+
 def test_actual_start_time_moves_the_window(event, person):
     teams_row(event, person, 0, 60)
     event.actual_start_at = at(15)
     event.save()
-    assert minutes(person, event) == 50  # from 10 (grace) to 60
+    # Present from 10 (the grace before the late start) to 60, but the event
+    # itself only ran 45 minutes.
+    assert minutes(person, event) == 45
 
 
 # --- Superseded rows ---------------------------------------------------------
+
+
+def test_a_row_with_a_supersession_pointing_at_it_does_not_count(event, person):
+    """The replaced row contributes nothing; its replacement contributes everything."""
+    replaced = teams_row(event, person, 0, 40)
+    replacement = teams_row(event, person, 0, 25)
+    assert minutes(person, event) == 40  # before: both active, merged
+    supersede([replaced], replacement)
+    assert replaced.supersession.new == replacement
+    assert minutes(person, event) == 25  # after: only the replacement
 
 
 def test_a_superseded_row_is_skipped_and_its_correction_counts(event, person):
@@ -205,10 +309,63 @@ def test_hours_only_row_adds_on_top_of_timed_rows(event, person):
     assert (result.minutes, result.source) == (45, MinutesSource.MIXED)
 
 
-def test_total_is_capped_at_the_window_length(event, person):
-    teams_row(event, person, -5, 60)
-    manual_row(event, person, minutes=40)
-    assert minutes(person, event) == 65  # the window: 5 grace + 60
+def test_hours_only_row_adds_on_top_of_merged_teams_intervals(event, person):
+    """
+    The path most likely to be "simplified" into a plain sum one day.
+
+    Laptop 0-25 and phone 10-30 overlap: 30 minutes once merged, not 45.
+    The hours-only manual row has no interval to merge, so its 20 minutes
+    are added on top: 50. A naive sum of all three rows would say 65.
+    """
+    teams_row(event, person, 0, 25, raw_display_name="laptop")
+    teams_row(event, person, 10, 30, raw_display_name="phone")
+    manual_row(event, person, minutes=20, reason="Phoned in for the last 20 minutes")
+    result = attended_minutes(person, event)
+    assert (result.minutes, result.source) == (50, MinutesSource.MIXED)
+    assert result.capped_seconds == 0
+
+
+def test_two_hours_only_rows_are_both_added(event, person):
+    manual_row(event, person, minutes=15)
+    manual_row(event, person, minutes=20)
+    assert minutes(person, event) == 35
+
+
+def test_total_is_capped_at_the_event_length_and_the_cap_is_logged(person, caplog):
+    """
+    70 minutes on Teams in a 70-minute event, plus a 30-minute manual row,
+    is 70 minutes, not 100. Nobody attends for longer than the event lasted,
+    and this is the figure a certificate prints. The cap biting usually
+    means a duplicate manual row, so it is logged.
+    """
+    event = make_event(minutes=70, credits="1.00")
+    teams_row(event, person, 0, 70)
+    manual_row(event, person, minutes=30, reason="Sat in Room B (entered twice by mistake)")
+    with caplog.at_level(logging.WARNING, logger="attendance.aggregation"):
+        result = attended_minutes(person, event)
+    assert result.minutes == 70
+    assert result.capped_seconds == 30 * 60
+    (warning,) = caplog.records
+    assert "capped at the event length" in warning.getMessage()
+    assert str(person.pk) in warning.getMessage() and str(event.pk) in warning.getMessage()
+
+
+def test_no_warning_when_the_total_fits(event, person, caplog):
+    teams_row(event, person, 0, 30)
+    manual_row(event, person, minutes=30)
+    with caplog.at_level(logging.WARNING, logger="attendance.aggregation"):
+        result = attended_minutes(person, event)
+    assert (result.minutes, result.capped_seconds) == (60, 0)
+    assert caplog.records == []
+
+
+def test_hours_only_rows_alone_are_capped_too(event, person, caplog):
+    manual_row(event, person, minutes=45)
+    manual_row(event, person, minutes=45)
+    with caplog.at_level(logging.WARNING, logger="attendance.aggregation"):
+        result = attended_minutes(person, event)
+    assert (result.minutes, result.capped_seconds) == (60, 30 * 60)
+    assert len(caplog.records) == 1
 
 
 def test_timed_manual_row_merges_like_any_other(event, person):
@@ -240,17 +397,17 @@ def test_room_roster_row_for_someone_who_walked_in_late(event):
 
 
 def test_room_time_and_own_connection_are_not_double_counted(event, person):
-    device = teams_row(event, None, 0, 40, raw_display_name="Conference Room B")
+    device = teams_row(event, None, 0, 30, raw_display_name="Conference Room B")
     roster_row(device, person)
-    teams_row(event, person, 30, 60)  # went back to their office and joined
+    teams_row(event, person, 20, 50)  # went back to their office and joined
     result = attended_minutes(person, event)
-    assert (result.minutes, result.source) == (60, MinutesSource.MIXED)
+    assert (result.minutes, result.source) == (50, MinutesSource.MIXED)  # not 30 + 30
 
 
 def test_room_roster_row_is_clamped_like_any_other(event, person):
     device = teams_row(event, None, -30, 75, raw_display_name="Conference Room B")
     roster_row(device, person)
-    assert minutes(person, event) == 65
+    assert minutes(person, event) == 60
 
 
 def test_several_people_behind_one_device(event):

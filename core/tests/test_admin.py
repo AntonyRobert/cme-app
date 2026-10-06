@@ -90,7 +90,7 @@ def test_possible_duplicates_filter_finds_the_two_tremblays(client, boss, seeded
 def test_event_page_shows_live_credit_per_person(client, boss, seeded):
     page = client.get(url(RoundsEvent, "change", seeded[0].pk)).content.decode()
     assert "Côté" in page and "0.75" in page
-    assert "Review: claims more than was recorded, or self-reported only" in page  # Morin
+    assert "Review: self-reported only" in page  # Morin
     assert "Missing" in page  # Okafor's incomplete evaluation
 
 

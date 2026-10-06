@@ -59,7 +59,7 @@ def test_seed_refuses_a_database_that_already_has_data(seeded):
 @pytest.mark.parametrize(
     "family, expected",
     [
-        ("Tremblay", (62, MinutesSource.TEAMS, True, D("1.00"), False)),  # one connection
+        ("Tremblay", (60, MinutesSource.TEAMS, True, D("1.00"), False)),  # joined early; capped
         ("Côté", (57, MinutesSource.TEAMS, True, D("0.75"), False)),  # three rejoins, rounds down
         ("Haddad", (60, MinutesSource.TEAMS, True, D("1.00"), False)),  # laptop + phone overlap
         ("Nguyen", (36, MinutesSource.TEAMS, True, D("0.50"), False)),  # lobby time clamped

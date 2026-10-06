@@ -355,8 +355,12 @@ The one place attendance is aggregated. Never compute it inline.
    sum the merged lengths. `duration_seconds` is deliberately ignored for these rows,
    because summing it double-counts overlaps and counts waiting-room time.
 3. **Hours-only rows** (no times): add `duration_seconds` on top.
-4. Cap the total at the length of the credit window, then convert to whole minutes,
-   rounding down.
+4. Cap the total at the event's own length (effective start to effective end, without the
+   grace), then convert to whole minutes, rounding down. Joining early can make up for
+   leaving early, but nobody attends for longer than the event lasted, and this is the
+   figure a certificate line prints. When hours-only rows are what pushed the total over,
+   the function logs a warning and the person is flagged for review: it usually means a
+   duplicate manual row.
 5. Report the source: `teams` (only Teams rows), `manual` (only manual or room-roster
    rows), `mixed` (both), or `self_reported` (see below).
 
@@ -364,7 +368,7 @@ The one place attendance is aggregated. Never compute it inline.
 self-report fallback sits one layer up, in `credits.rules.creditable_minutes(person,
 event)`, because evaluations belong to the credits app. When the person has no active rows
 at all, it falls back to the sum of `self_reported_minutes` across their submissions for
-the event's sessions, capped at the window length, with source `self_reported`. Credit
+the event's sessions, capped at the event's length, with source `self_reported`. Credit
 resting on a self-report alone is always flagged for review. When both exist and the
 person claims more than was recorded, by more than 15 minutes, they are flagged for review
 rather than one figure being silently picked. Claiming less is not flagged: self-reports

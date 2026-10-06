@@ -88,6 +88,11 @@ class RoundsEvent(UUIDModel):
     def effective_end(self):
         return self.actual_end_at or self.end_at
 
+    @property
+    def length_seconds(self):
+        """How long the event actually lasted, without the grace before the start."""
+        return int((self.effective_end - self.effective_start).total_seconds())
+
     def credit_window(self):
         """
         The (start, end) inside which attended time counts.
