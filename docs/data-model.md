@@ -360,10 +360,14 @@ The one place attendance is aggregated. Never compute it inline.
 5. Report the source: `teams` (only Teams rows), `manual` (only manual or room-roster
    rows), `mixed` (both), or `self_reported` (see below).
 
-When the person has no active rows at all, fall back to the sum of `self_reported_minutes`
-across their submissions for the event's sessions, capped at the window length, with source
-`self_reported`. When both exist and differ by more than 15 minutes, flag the person for
-review rather than silently picking one. Recorded minutes still win.
+`attended_minutes` lives in the attendance app and only knows about attendance rows. The
+self-report fallback sits one layer up, in `credits.rules.creditable_minutes(person,
+event)`, because evaluations belong to the credits app. When the person has no active rows
+at all, it falls back to the sum of `self_reported_minutes` across their submissions for
+the event's sessions, capped at the window length, with source `self_reported`. Credit
+resting on a self-report alone is always flagged for review. When both exist and differ by
+more than 15 minutes, the person is flagged for review rather than one being silently
+picked. Recorded minutes still win, even when they add up to zero.
 
 The docstring repeats step 2 in plain words. Someone will try to "optimize" this back into
 a `SUM(duration_seconds)`, and that would be wrong.
@@ -442,10 +446,12 @@ No stored credit total anywhere except an issued certificate.
 Credit is **per event**. Each rule lives in its own function:
 
 ```
-evaluation_gate(person, event)      -> bool       # rule still open, see decisions.md
+evaluation_gate(person, event)      -> bool       # rule still open, see decisions.md;
+                                                  # for now: one complete evaluation
+creditable_minutes(person, event)   -> minutes, source, needs_review
 round_credits(hours)                -> Decimal    # round DOWN to the nearest 0.25
 computed_credits(person, event)     = 0 if not gate, else
-                                      min(round_credits(attended_minutes / 60),
+                                      min(round_credits(creditable_minutes / 60),
                                           event.accredited_credits)
 event_credits(person, event)        = max(computed_credits + sum(adjustment deltas), 0)
 ```
@@ -527,6 +533,9 @@ only once.
 Revocation sets `revoked_at` and `revoked_reason`. That is a status change, not an edit of
 the printed content, and it is audit-logged.
 
+Issuing and revoking each have their own permission (`issue_certificate`,
+`revoke_certificate`), separate from general admin access.
+
 ### Verification
 
 The public page at `/verify/<code>` shows recipient name, credential, events and sessions,
@@ -564,8 +573,8 @@ anyone, and SES will suspend the account for it.
 | --- | --- | --- |
 | id | bigserial pk | |
 | actor_type | enum | staff, attendee, system |
-| actor_user | FK User, nullable, on delete SET NULL | |
-| actor_person | FK Person, nullable, on delete SET NULL | |
+| actor_user | FK User, nullable, on delete PROTECT | |
+| actor_person | FK Person, nullable, on delete PROTECT | |
 | actor_label | text, required | Snapshot of username or email at the time, or `system:<job>` |
 | action | text | `certificate.issued`, `attendance.matched`, `credit.adjusted` |
 | object_type, object_id | text, text | Text because staff `User` ids are integers |
@@ -577,8 +586,10 @@ A check constraint ties the type to the FKs: `staff` requires `actor_user`, `att
 requires `actor_person`, and `system` requires both to be null. A null actor always says
 why.
 
-`actor_label` is what keeps an entry meaningful in three years, after the user is renamed
-or deleted. It is personal information, so erasure interacts with it (see the retention
+`actor_label` is what keeps an entry meaningful in three years, after the user is renamed.
+The FKs are PROTECT rather than SET NULL: nulling them would be an UPDATE on audit rows,
+which the app's database role is not allowed to do. A staff account with audit history is
+deactivated, not deleted. The label is personal information, so erasure interacts with it (see the retention
 question in `decisions.md`).
 
 Append-only. No update or delete path in the app, and in production the app's database role
