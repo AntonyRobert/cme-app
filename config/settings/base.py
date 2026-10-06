@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     "core",
     "accounts",
     "people",
+    "rounds",
 ]
 
 # Staff accounts. Must be set before the first migration and never changed.
