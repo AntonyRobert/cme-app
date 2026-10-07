@@ -22,6 +22,7 @@ from people.identity import resolve_root
 from people.models import PersonEmail
 from people.normalize import normalize_email
 
+from . import teams
 from .models import AttendanceRecord, AttendanceSupersession, AttendanceUpload
 
 Match = AttendanceRecord.MatchMethod
@@ -223,3 +224,146 @@ def store_upload(event, uploaded_file, *, user, request=None):
         metadata={"event": str(event.pk), "filename": upload.original_filename, "sha256": sha256},
     )
     return upload
+
+
+# --- Teams exports --------------------------------------------------------------
+
+
+def check_export_against_event(export, event):
+    """
+    Confirm an export belongs to `event` and return the date order to read
+    it in. Fails loudly, never guesses:
+
+    - the export's date must be the event's date under one reading of the
+      ambiguous day/month (see attendance.teams.date_order_for);
+    - the meeting title must match the event's Teams meeting title;
+    - the meeting must overlap the event's scheduled hours.
+    """
+    from rounds.models import RoundsEvent  # noqa: F401  (documents the dependency)
+
+    order = teams.date_order_for(export, event.date)
+    if not event.teams_meeting_title:
+        raise teams.ExportError(
+            f"{event} has no Teams meeting title, so this export can't be checked against it. "
+            f"Set it to {export.title!r} if that is the right meeting."
+        )
+    if teams.normalize_title(export.title) != teams.normalize_title(event.teams_meeting_title):
+        raise teams.ExportError(
+            f"This export is for the meeting {export.title!r}; {event} is "
+            f"{event.teams_meeting_title!r}."
+        )
+    start, end, _ = teams.resolve_times(export, order)
+    if end <= event.start_at or start >= event.end_at:
+        raise teams.ExportError(
+            f"This meeting ran {timezone.localtime(start):%H:%M} to "
+            f"{timezone.localtime(end):%H:%M}, outside {event}'s scheduled hours."
+        )
+    return order
+
+
+def match_event(export):
+    """The one event this export belongs to, by meeting title and date."""
+    from rounds.models import RoundsEvent
+
+    title = teams.normalize_title(export.title)
+    candidates = []
+    for order in (teams.MONTH_FIRST, teams.DAY_FIRST):
+        try:
+            day = export.start.date_as(order)
+        except ValueError:
+            continue
+        for event in RoundsEvent.objects.filter(date=day):
+            if teams.normalize_title(event.teams_meeting_title) == title and event not in candidates:
+                candidates.append(event)
+    if not candidates:
+        raise teams.ExportError(
+            f"No event has the Teams meeting title {export.title!r} on the date "
+            f"{export.start.text.split(',')[0]} (read either way). Choose the event, or set its "
+            "Teams meeting title."
+        )
+    if len(candidates) > 1:
+        names = ", ".join(str(event) for event in candidates)
+        raise teams.ExportError(
+            f"The date {export.start.text.split(',')[0]} could be either of {names}. "
+            "Choose the event."
+        )
+    return candidates[0]
+
+
+@transaction.atomic
+def import_export(upload, export, order, *, user, request=None):
+    """
+    Write one AttendanceRecord per Section 3 row of a parsed export, and
+    match each row by exact email against PersonEmail. Rows that do not
+    match wait in the review queue.
+
+    The Teams meeting role is copied as observed and nothing reads it.
+    """
+    if upload.parsed_at is not None:
+        raise teams.ExportError(
+            "This upload has already been parsed. Re-parsing is not designed yet."
+        )
+    _, _, resolved = teams.resolve_times(export, order)
+    owners = dict(
+        PersonEmail.objects.filter(
+            email__in={normalize_email(row.email) for row, _, _ in resolved if row.email}
+        ).values_list("email", "person_id")
+    )
+    now = timezone.now()
+    matched = 0
+    for row, join, leave in resolved:
+        person_id = owners.get(normalize_email(row.email)) if row.email else None
+        if person_id:
+            matched += 1
+        AttendanceRecord.objects.create(
+            source=AttendanceRecord.Source.TEAMS_UPLOAD,
+            upload=upload,
+            parser_version=teams.PARSER_VERSION,
+            event=upload.event,
+            raw_display_name=row.display_name,
+            raw_email=row.email or None,
+            raw_participant_role=row.role or None,
+            join_at=join,
+            leave_at=leave,
+            duration_seconds=row.duration_seconds,
+            person_id=person_id,
+            match_method=Match.EMAIL_EXACT if person_id else Match.UNMATCHED,
+            matched_at=now if person_id else None,
+            created_by=user,
+        )
+    upload.parsed_at = now
+    upload.parser_version = teams.PARSER_VERSION
+    upload.row_count = len(resolved)
+    upload.parse_warnings = list(export.warnings)
+    upload.save()
+    record(
+        "attendance.parsed",
+        upload,
+        user=user,
+        request=request,
+        metadata={
+            "parser_version": teams.PARSER_VERSION,
+            "date_order": order,
+            "rows": len(resolved),
+            "matched": matched,
+            "unmatched": len(resolved) - matched,
+            "warnings": export.warnings,
+        },
+    )
+    return upload
+
+
+@transaction.atomic
+def upload_teams_export(uploaded_file, *, user, event=None, request=None):
+    """
+    Parse, check, store and import a Teams export in one step. Nothing is
+    stored if the file is unusable or does not belong to the event. With
+    no event given, the event is found by meeting title and date.
+    """
+    raw = b"".join(uploaded_file.chunks())
+    export = teams.parse_export(raw)
+    event = event or match_event(export)
+    order = check_export_against_event(export, event)
+    uploaded_file.seek(0)
+    upload = store_upload(event, uploaded_file, user=user, request=request)
+    return import_export(upload, export, order, user=user, request=request), export

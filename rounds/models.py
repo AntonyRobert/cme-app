@@ -72,7 +72,12 @@ class RoundsEvent(UUIDModel):
     start_at = models.DateTimeField(help_text="Every session must fall between these two.")
     end_at = models.DateTimeField(blank=True, help_text="Blank means three hours after the start.")
     teams_join_url = models.URLField(max_length=2000, blank=True)
-    teams_meeting_id = models.CharField(max_length=200, null=True, blank=True)
+    teams_meeting_title = models.CharField(
+        max_length=300,
+        blank=True,
+        help_text="The meeting title exactly as Teams shows it. An attendance export is "
+        "matched to this event on this title plus the date. Teams exports carry no meeting ID.",
+    )
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
     accredited_credits = models.DecimalField(
         max_digits=5,

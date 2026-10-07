@@ -32,7 +32,7 @@ def test_swapping_two_sessions_on_the_event_page(client, boss):
         "accredited_credits": "2.00",
         "start_at_0": event.start_at.astimezone().date().isoformat(), "start_at_1": local(event.start_at),
         "end_at_0": event.end_at.astimezone().date().isoformat(), "end_at_1": local(event.end_at),
-        "teams_join_url": "", "teams_meeting_id": "",
+        "teams_join_url": "", "teams_meeting_title": "",
         "sessions-TOTAL_FORMS": 2, "sessions-INITIAL_FORMS": 2,
     }
     for i, (s, pos) in enumerate([(first, 2), (second, 1)]):

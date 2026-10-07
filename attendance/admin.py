@@ -8,14 +8,17 @@ from django.utils.html import format_html, format_html_join
 
 from core.admin import BaseAdmin, NoDeleteMixin, SafeModelForm, admin_link
 
+from . import teams
 from .models import AttendanceRecord, AttendanceSupersession, AttendanceUpload
 from .services import (
     ALLOWED_UPLOAD_EXTENSIONS,
     MAX_UPLOAD_BYTES,
+    check_export_against_event,
     log_manual_row,
+    match_event,
     match_record,
-    store_upload,
     supersede_rows,
+    upload_teams_export,
 )
 
 Source = AttendanceRecord.Source
@@ -26,13 +29,39 @@ Source = AttendanceRecord.Source
 
 class UploadForm(SafeModelForm):
     file = forms.FileField(
-        help_text="The attendance export exactly as downloaded from Teams (.csv or .xlsx). "
-        "It is stored untouched."
+        help_text="The attendance export exactly as downloaded from Teams. It is stored "
+        "untouched, then its rows are read in."
     )
 
     class Meta:
         model = AttendanceUpload
         fields = ["event"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["event"].required = False
+        self.fields["event"].help_text = (
+            "Leave blank to find the event by its Teams meeting title and the date in the "
+            "file. Either way the file is checked against the event and refused if the "
+            "date, title or hours don't match."
+        )
+
+    def clean(self):
+        cleaned = super().clean()
+        uploaded = cleaned.get("file")
+        if uploaded is None or self.errors:
+            return cleaned
+        try:
+            export = teams.parse_export(b"".join(uploaded.chunks()))
+            event = cleaned.get("event") or match_event(export)
+            check_export_against_event(export, event)
+        except teams.ExportError as error:
+            raise forms.ValidationError(str(error))
+        finally:
+            uploaded.seek(0)
+        cleaned["event"] = event
+        self.instance.event = event
+        return cleaned
 
     def clean_file(self):
         uploaded = self.cleaned_data["file"]
@@ -88,6 +117,7 @@ class AttendanceUploadAdmin(NoDeleteMixin, BaseAdmin):
             "parsed_at",
             "parser_version",
             "row_count",
+            "warnings_display",
         ]
 
     def get_readonly_fields(self, request, obj=None):
@@ -96,15 +126,26 @@ class AttendanceUploadAdmin(NoDeleteMixin, BaseAdmin):
     def save_model(self, request, obj, form, change):
         if change:
             return
-        stored = store_upload(obj.event, form.cleaned_data["file"], request=request, user=request.user)
+        stored, export = upload_teams_export(
+            form.cleaned_data["file"], event=obj.event, user=request.user, request=request
+        )
         # The admin goes on to use `obj` for its redirect and message.
         obj.__dict__.update(stored.__dict__)
+        unmatched = stored.records.filter(person__isnull=True).count()
         self.message_user(
             request,
-            "Stored. Reading rows out of an export arrives with the parser; "
-            "until then attendance is entered by hand.",
-            messages.WARNING,
+            f"Read {stored.row_count} rows for {stored.event}. {unmatched} could not be matched "
+            "by email and wait in the review queue (Attendance records, filter Unmatched).",
+            messages.SUCCESS,
         )
+        for warning in export.warnings:
+            self.message_user(request, f"Check: {warning}", messages.WARNING)
+
+    @admin.display(description="Parser warnings")
+    def warnings_display(self, obj):
+        if not obj.parse_warnings:
+            return "None"
+        return format_html_join("", "<p>{}</p>", ((w,) for w in obj.parse_warnings))
 
     @admin.display(description="Parsed", boolean=True)
     def parsed(self, obj):

@@ -81,7 +81,7 @@ class RoundsEventAdmin(BaseAdmin):
     ]
     list_filter = ["status"]
     date_hierarchy = "date"
-    search_fields = ["title", "teams_meeting_id", "sessions__title"]
+    search_fields = ["title", "teams_meeting_title", "sessions__title"]
     inlines = [SessionInline]
     readonly_fields = ["credit_summary"]
     fieldsets = [
@@ -95,7 +95,7 @@ class RoundsEventAdmin(BaseAdmin):
                 "below. If a talk ran over, change its end time.",
             },
         ),
-        ("Teams", {"fields": ["teams_join_url", "teams_meeting_id"]}),
+        ("Teams", {"fields": ["teams_join_url", "teams_meeting_title"]}),
         ("Credit, as it stands", {"fields": ["credit_summary"]}),
     ]
 
@@ -152,10 +152,13 @@ class RoundsEventAdmin(BaseAdmin):
         if not rows:
             return "No matched attendance or evaluations yet."
         total = obj.sessions.count()
+        def with_adjustment(computed, adjustment):
+            return f"{computed} {adjustment:+}" if adjustment else computed
+
         body = format_html_join(
             "",
             "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>"
-            "<td><strong>{}</strong></td><td>{}</td></tr>",
+            "<td><strong>{}</strong></td><td>{}</td><td><strong>{}</strong></td><td>{}</td></tr>",
             (
                 (
                     admin_link(person),
@@ -164,10 +167,10 @@ class RoundsEventAdmin(BaseAdmin):
                     f"{len(b.sessions_attended)}/{total}",
                     f"{len(b.sessions_evaluated)}/{total}",
                     b.credited_minutes,
-                    f"{b.computed_credits} {b.adjustment_credits:+}"
-                    if b.adjustment_credits
-                    else b.computed_credits,
-                    b.credits,
+                    with_adjustment(b.attendance_computed, b.attendance_adjustment),
+                    b.attendance_credits,
+                    ", ".join(str(s.position) for s in b.sessions_presented) or "-",
+                    b.teaching_credits,
                     "Review: " + "; ".join(b.review_reasons) if b.needs_review else "",
                 )
                 for person, b in rows
@@ -175,8 +178,9 @@ class RoundsEventAdmin(BaseAdmin):
         )
         return format_html(
             "<table><thead><tr><th>Person</th><th>Minutes</th><th>From</th>"
-            "<th>Sessions attended</th><th>Evaluated</th><th>Minutes credited</th>"
-            "<th>Computed (+ adjustment)</th><th>Credits</th><th></th></tr></thead>"
+            "<th>Attended</th><th>Evaluated</th><th>Attendance minutes credited</th>"
+            "<th>Computed (+ adjustment)</th><th>Attendance credits</th>"
+            "<th>Presented session</th><th>Teaching credits</th><th></th></tr></thead>"
             "<tbody>{}</tbody></table>",
             body,
         )

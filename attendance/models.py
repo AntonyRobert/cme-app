@@ -40,6 +40,12 @@ class AttendanceUpload(FrozenFieldsMixin, UUIDModel):
     parsed_at = models.DateTimeField(null=True, blank=True)
     parser_version = models.CharField(max_length=50, null=True, blank=True)
     row_count = models.PositiveIntegerField(default=0)
+    parse_warnings = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="What the parser noticed but did not stop for, such as Teams' own totals "
+        "disagreeing with its rows.",
+    )
 
     class Meta:
         ordering = ["-uploaded_at"]
@@ -130,7 +136,18 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
     raw_display_name = models.CharField(max_length=300, null=True, blank=True)
     # Exactly as Teams wrote it, so not lowercased. Matching lowercases.
     raw_email = models.CharField(max_length=320, null=True, blank=True)
-    raw_participant_role = models.CharField(max_length=50, null=True, blank=True)
+    # A Teams MEETING PERMISSION, not a statement about who presented:
+    # everyone is given "Presenter" so they can share a screen. Stored as
+    # observed; nothing may read it to decide presenter identity or credit.
+    raw_participant_role = models.CharField(
+        "Teams meeting role",
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text="A Teams meeting permission, as written in the export. It says nothing "
+        "about who presented and has no effect on credit. Presenters are the session's "
+        "presenters.",
+    )
     join_at = models.DateTimeField(null=True, blank=True)
     leave_at = models.DateTimeField(null=True, blank=True)
     duration_seconds = models.PositiveIntegerField(
