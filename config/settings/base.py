@@ -129,3 +129,12 @@ UPLOAD_ROOT = Path(env("UPLOAD_ROOT", str(BASE_DIR / "uploads"))).resolve()
 
 # Default title for a RoundsEvent. Prints on certificate lines.
 SERIES_NAME = "Health Informatics Rounds"
+
+# The evaluation form is open this many days after the event date, and a
+# reopening lasts this long again.
+EVALUATION_WINDOW_DAYS = 7
+# Self-service reopenings per person per session. Program admins can override.
+EVALUATION_REOPENINGS_MAX = 3
+# (month, day) the accreditation year ends. No self-service reopening past
+# the end of the year that contains the event.
+ACCREDITATION_YEAR_END = (12, 31)

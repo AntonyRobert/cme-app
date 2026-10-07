@@ -1,9 +1,10 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 
 from audit.log import record
-from core.admin import AppendOnlyAdmin, BaseAdmin, SafeModelForm
+from core.admin import AppendOnlyAdmin, BaseAdmin, NoDeleteMixin, SafeModelForm
 
-from .models import CreditAdjustment, EvaluationResponse, EvaluationSubmission
+from .models import CreditAdjustment, EvaluationResponse, EvaluationSubmission, EvaluationWindow
+from .windows import ReopeningRefused, request_reopening
 
 
 class EvaluationResponseInline(admin.TabularInline):
@@ -37,7 +38,7 @@ class EvaluationSubmissionAdmin(BaseAdmin):
         "person",
         "session",
         "submitted_at",
-        "self_reported_minutes",
+        "self_reported_session_minutes",
         "is_complete",
     ]
     list_filter = ["is_complete", "session__event"]
@@ -50,7 +51,7 @@ class EvaluationSubmissionAdmin(BaseAdmin):
         "person",
         "session",
         "submitted_at",
-        "self_reported_minutes",
+        "self_reported_session_minutes",
         "attestation",
         "is_complete",
     ]
@@ -59,7 +60,7 @@ class EvaluationSubmissionAdmin(BaseAdmin):
         return {
             "person": str(obj.person_id),
             "session": str(obj.session_id),
-            "self_reported_minutes": obj.self_reported_minutes,
+            "self_reported_session_minutes": obj.self_reported_session_minutes,
             "is_complete": obj.is_complete,
         }
 
@@ -85,6 +86,80 @@ class EvaluationSubmissionAdmin(BaseAdmin):
     def delete_queryset(self, request, queryset):
         for obj in queryset:
             self.delete_model(request, obj)
+
+
+class WindowForm(SafeModelForm):
+    class Meta:
+        model = EvaluationWindow
+        fields = ["person", "session", "reason"]
+
+
+@admin.register(EvaluationWindow)
+class EvaluationWindowAdmin(NoDeleteMixin, BaseAdmin):
+    """
+    Reopen an evaluation form for one person and one session.
+
+    Adding one here is a staff override: it skips the self-service limits
+    (three per session, and never past the end of the accreditation year)
+    and is logged against you.
+    """
+
+    list_display = ["person", "session", "opened_at", "expires_at", "closed_at", "granted_by", "state"]
+    list_filter = ["session__event"]
+    date_hierarchy = "opened_at"
+    search_fields = ["person__family_name", "person__given_name", "session__title", "reason"]
+    list_select_related = ["person", "session__event", "granted_by"]
+    autocomplete_fields = ["person", "session"]
+    readonly_fields = ["opened_at", "expires_at", "granted_by", "closed_at"]
+
+    def get_form(self, request, obj=None, **kwargs):
+        if obj is None:
+            kwargs["form"] = WindowForm
+        return super().get_form(request, obj, **kwargs)
+
+    def get_fields(self, request, obj=None):
+        if obj is None:
+            return ["person", "session", "reason"]
+        return ["person", "session", "reason", "opened_at", "expires_at", "granted_by", "closed_at"]
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def save_model(self, request, obj, form, change):
+        if change:
+            return
+        try:
+            window = request_reopening(
+                obj.person,
+                obj.session,
+                reason=obj.reason,
+                user=request.user,
+                override=True,
+                request=request,
+            )
+        except ReopeningRefused as refused:
+            # The form has already validated; the only refusal left is
+            # "already evaluated", which the message explains.
+            self.message_user(request, str(refused), messages.ERROR)
+            obj.pk = None
+            return
+        obj.__dict__.update(window.__dict__)
+        self.message_user(
+            request,
+            f"Open until {window.expires_at:%Y-%m-%d %H:%M}. Logged as an override by you.",
+            messages.SUCCESS,
+        )
+
+    def response_add(self, request, obj, post_url_continue=None):
+        if obj.pk is None:
+            return self.response_post_save_add(request, obj)
+        return super().response_add(request, obj, post_url_continue)
+
+    @admin.display(description="State")
+    def state(self, obj):
+        if obj.closed_at:
+            return "Closed: evaluated"
+        return "Open" if obj.is_open() else "Expired"
 
 
 @admin.register(CreditAdjustment)

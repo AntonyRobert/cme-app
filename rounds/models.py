@@ -9,13 +9,17 @@ from django.db.models import F, Q
 from django.utils import timezone
 
 from core.constraints import is_quarter_multiple, validate_quarter_multiple
-from core.models import AppendOnlyMixin, UUIDModel
+from core.models import AppendOnlyMixin, ImmutableRowError, UUIDModel
 from people.identity import identity_ids
 from people.models import Person
 from people.ownership import PersonOwnedQuerySet
 
-# Joining up to this long before the start still counts as attended time.
+# Attended time counts from this long before the first session starts to
+# this long after the last one ends. Symmetric on purpose.
 CREDIT_WINDOW_GRACE = datetime.timedelta(minutes=5)
+
+# A session's end defaults to this long after its start.
+DEFAULT_SESSION_LENGTH = datetime.timedelta(hours=1)
 
 
 def default_event_title():
@@ -42,16 +46,8 @@ class RoundsEvent(UUIDModel):
         max_length=200, default=default_event_title, help_text="Prints on certificate lines."
     )
     date = models.DateField()
-    start_at = models.DateTimeField(help_text="Scheduled start.")
-    end_at = models.DateTimeField(help_text="Scheduled end.")
-    actual_start_at = models.DateTimeField(
-        null=True, blank=True, help_text="Only if it differed. Blank means as scheduled."
-    )
-    actual_end_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text="Set this when rounds ran over and everyone's credit follows.",
-    )
+    start_at = models.DateTimeField(help_text="Every session must fall between these two.")
+    end_at = models.DateTimeField()
     teams_join_url = models.URLField(max_length=2000, blank=True)
     teams_meeting_id = models.CharField(max_length=200, null=True, blank=True)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
@@ -81,31 +77,27 @@ class RoundsEvent(UUIDModel):
         return f"{self.date} {self.title}"
 
     @property
-    def effective_start(self):
-        return self.actual_start_at or self.start_at
+    def is_closed(self):
+        return self.status == self.Status.CLOSED
 
-    @property
-    def effective_end(self):
-        return self.actual_end_at or self.end_at
-
-    @property
-    def length_seconds(self):
-        """How long the event actually lasted, without the grace before the start."""
-        return int((self.effective_end - self.effective_start).total_seconds())
-
-    def credit_window(self):
-        """
-        The (start, end) inside which attended time counts.
-
-        Time outside it, such as waiting in the lobby, is not educational
-        activity. The window opens CREDIT_WINDOW_GRACE before the start.
-        """
-        return self.effective_start - CREDIT_WINDOW_GRACE, self.effective_end
+    def _stored_status(self):
+        if self._state.adding:
+            return None
+        return RoundsEvent.objects.filter(pk=self.pk).values_list("status", flat=True).first()
 
     def clean(self):
         super().clean()
-        if self.start_at and self.end_at and self.effective_end <= self.effective_start:
-            raise ValidationError("The event must end after it starts (check the actual times).")
+        if self.start_at and self.end_at and self.end_at <= self.start_at:
+            raise ValidationError({"end_at": "The event must end after it starts."})
+        if self._stored_status() == self.Status.CLOSED and not self.is_closed:
+            raise ValidationError(
+                {"status": "A closed event stays closed. Its totals are frozen."}
+            )
+
+    def save(self, *args, **kwargs):
+        if self._stored_status() == self.Status.CLOSED and not self.is_closed:
+            raise ImmutableRowError("A closed event cannot be reopened.")
+        super().save(*args, **kwargs)
 
 
 class COIDeclarationQuerySet(PersonOwnedQuerySet):
@@ -159,7 +151,14 @@ class COIDeclaration(AppendOnlyMixin, UUIDModel):
 
 
 class Session(UUIDModel):
-    """One lecture inside an event. The evaluation form targets a session."""
+    """
+    One lecture inside an event. The evaluation form targets a session, and
+    credit is earned session by session.
+
+    Presenters give the start and end time when they submit. Attended time
+    is clamped to these intervals: a break between sessions is not
+    educational activity.
+    """
 
     event = models.ForeignKey(RoundsEvent, on_delete=models.PROTECT, related_name="sessions")
     position = models.PositiveSmallIntegerField(help_text="1, 2, 3. Order on the flyer.")
@@ -167,7 +166,8 @@ class Session(UUIDModel):
     presenters = models.ManyToManyField(
         Person, through="SessionPresenter", related_name="sessions_presented"
     )
-    duration_minutes = models.PositiveSmallIntegerField()
+    start_at = models.DateTimeField()
+    end_at = models.DateTimeField(blank=True, help_text="Blank means one hour after the start.")
     draft_blurb = models.TextField(blank=True)
     published_blurb = models.TextField(blank=True)
     submitted_at = models.DateTimeField(
@@ -175,13 +175,58 @@ class Session(UUIDModel):
     )
 
     class Meta:
-        ordering = ["event", "position"]
+        ordering = ["event", "start_at", "position"]
         constraints = [
             models.UniqueConstraint(fields=["event", "position"], name="session_unique_position"),
+            models.CheckConstraint(
+                condition=Q(end_at__gt=F("start_at")), name="session_ends_after_start"
+            ),
         ]
 
     def __str__(self):
         return f"{self.event.date} #{self.position} {self.title}"
+
+    @property
+    def length_seconds(self):
+        return int((self.end_at - self.start_at).total_seconds())
+
+    @property
+    def length_minutes(self):
+        return self.length_seconds // 60
+
+    def _fill_defaults(self):
+        if self.start_at and self.end_at is None:
+            self.end_at = self.start_at + DEFAULT_SESSION_LENGTH
+
+    def clean(self):
+        super().clean()
+        self._fill_defaults()
+        if not (self.start_at and self.end_at):
+            return
+        errors = {}
+        if self.end_at <= self.start_at:
+            errors["end_at"] = "The session must end after it starts."
+        if self.event_id:
+            event = self.event
+            if self.start_at < event.start_at or self.end_at > event.end_at:
+                errors["start_at"] = (
+                    f"Sessions must fall inside the event, "
+                    f"{timezone.localtime(event.start_at):%H:%M} to "
+                    f"{timezone.localtime(event.end_at):%H:%M}."
+                )
+            overlapping = (
+                Session.objects.filter(event=event, start_at__lt=self.end_at, end_at__gt=self.start_at)
+                .exclude(pk=self.pk)
+                .first()
+            )
+            if overlapping is not None:
+                errors["start_at"] = f"Overlaps session {overlapping.position}, {overlapping.title}."
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self._fill_defaults()
+        super().save(*args, **kwargs)
 
 
 class SessionPresenter(UUIDModel):

@@ -52,6 +52,7 @@ COORDINATOR_PERMISSIONS = [
 # Everything a coordinator does, plus the decisions that create or change credit.
 PROGRAM_ADMIN_ONLY_PERMISSIONS = [
     "credits.add_creditadjustment",
+    "credits.add_evaluationwindow",
     "certificates.issue_certificate",
     "certificates.revoke_certificate",
     "people.merge_person",

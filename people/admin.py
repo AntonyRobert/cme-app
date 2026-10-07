@@ -91,6 +91,7 @@ class PersonAdmin(NoDeleteMixin, BaseAdmin):
         "merged_into_link",
         "merged_from_links",
         "linked_rows",
+        "credit_standing",
         "created_at",
         "updated_at",
     ]
@@ -115,6 +116,15 @@ class PersonAdmin(NoDeleteMixin, BaseAdmin):
                     "created_at",
                     "updated_at",
                 ]
+            },
+        ),
+        (
+            "Credit, earned versus certified",
+            {
+                "fields": ["credit_standing"],
+                "description": "Earned is computed now from attendance and evaluations. "
+                "Certified is what is printed on their valid certificates. A late "
+                "evaluation makes the two differ; the answer is a reissue, on request.",
             },
         ),
     ]
@@ -179,6 +189,42 @@ class PersonAdmin(NoDeleteMixin, BaseAdmin):
             else:
                 parts.append(format_html("{} {}", count, label))
         return format_html_join(", ", "{}", ((part,) for part in parts))
+
+    @admin.display(description="By event")
+    def credit_standing(self, obj):
+        if not obj.pk:
+            return "-"
+        from credits.reports import person_standing
+
+        rows = person_standing(obj)
+        if not rows:
+            return "No attendance or evaluations yet."
+        body = format_html_join(
+            "",
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            (
+                (
+                    admin_link(r.event),
+                    f"{len(r.breakdown.sessions_attended)}/{len(r.breakdown.sessions)}",
+                    f"{len(r.breakdown.sessions_evaluated)}/{len(r.breakdown.sessions)}",
+                    r.earned_credits,
+                    r.certified_credits,
+                    "" if r.difference == 0 else f"{r.difference:+} not yet certified",
+                )
+                for r in rows
+            ),
+        )
+        total_earned = sum(r.earned_credits for r in rows)
+        total_certified = sum(r.certified_credits for r in rows)
+        return format_html(
+            "<table><thead><tr><th>Event</th><th>Sessions attended</th><th>Evaluated</th>"
+            "<th>Earned</th><th>Certified</th><th></th></tr></thead><tbody>{}</tbody>"
+            "<tfoot><tr><th>Total</th><td></td><td></td><th>{}</th><th>{}</th><td></td></tr>"
+            "</tfoot></table>",
+            body,
+            total_earned,
+            total_certified,
+        )
 
     # --- Merging -------------------------------------------------------------
 

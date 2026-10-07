@@ -37,6 +37,7 @@ class Certificate(FrozenFieldsMixin, UUIDModel):
         "licence_jurisdiction",
         "verification_code",
         "template_version",
+        "pdf_path",
         "pdf_sha256",
         "issued_at",
         "issued_by",
@@ -59,6 +60,9 @@ class Certificate(FrozenFieldsMixin, UUIDModel):
         max_length=20, unique=True, default=generate_verification_code
     )
     template_version = models.CharField(max_length=50)
+    pdf_path = models.CharField(
+        max_length=500, blank=True, help_text="Relative to UPLOAD_ROOT. The artefact of record."
+    )
     pdf_sha256 = models.CharField(max_length=64, blank=True)
     issued_at = models.DateTimeField(default=timezone.now)
     issued_by = models.ForeignKey(

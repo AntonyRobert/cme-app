@@ -8,13 +8,14 @@ from django.db import IntegrityError, transaction
 from core.models import ImmutableRowError
 from people.tests.factories import make_person
 from rounds.models import (
-    CREDIT_WINDOW_GRACE,
     COIDeclaration,
+    RoundsEvent,
+    Session,
     SessionPresenter,
     end_of_academic_year,
 )
 
-from .factories import EVENT_START, at, make_event, make_session
+from .factories import at, make_event, make_session
 
 pytestmark = pytest.mark.django_db
 
@@ -37,19 +38,69 @@ def test_title_defaults_to_the_series_name(settings):
     assert make_event().title == "Test Rounds"
 
 
-def test_credit_window_uses_the_schedule_with_grace_at_the_start():
-    event = make_event()
-    assert event.credit_window() == (EVENT_START - CREDIT_WINDOW_GRACE, at(60))
+def test_a_session_ends_an_hour_after_it_starts_by_default():
+    event = make_event(minutes=180, sessions=0)
+    session = Session(event=event, position=1, title="Talk", start_at=at(60))
+    session.full_clean()
+    session.save()
+    assert session.end_at == at(120)
+    assert (session.length_seconds, session.length_minutes) == (3600, 60)
 
 
-def test_actual_times_override_the_schedule():
-    event = make_event(actual_start_at=at(10), actual_end_at=at(80))
-    assert event.credit_window() == (at(10) - CREDIT_WINDOW_GRACE, at(80))
+def test_a_session_must_fall_inside_its_event():
+    event = make_event(minutes=60, sessions=0)
+    for start, end in ((-10, 30), (30, 70), (-5, 65)):
+        session = Session(event=event, position=1, title="Talk", start_at=at(start), end_at=at(end))
+        with pytest.raises(ValidationError) as err:
+            session.full_clean()
+        assert "start_at" in err.value.message_dict
+    Session(event=event, position=1, title="Talk", start_at=at(0), end_at=at(60)).full_clean()
 
 
-def test_only_one_actual_time_may_be_set():
-    event = make_event(actual_end_at=at(75))
-    assert event.credit_window() == (EVENT_START - CREDIT_WINDOW_GRACE, at(75))
+def test_a_session_must_end_after_it_starts():
+    event = make_event(minutes=60, sessions=0)
+    with pytest.raises(IntegrityError), transaction.atomic():
+        Session.objects.create(event=event, position=1, title="Talk", start_at=at(30), end_at=at(10))
+
+
+def test_sessions_of_one_event_may_not_overlap():
+    event = make_event(minutes=180, sessions=0)
+    make_session(event, start=0, minutes=60)
+    make_session(event, start=60, minutes=60)  # touching is fine
+    clash = Session(event=event, position=3, title="Talk", start_at=at(100), end_at=at(160))
+    with pytest.raises(ValidationError) as err:
+        clash.full_clean()
+    assert "Overlaps" in str(err.value)
+    Session(event=event, position=3, title="Talk", start_at=at(120), end_at=at(180)).full_clean()
+
+
+def test_sessions_are_ordered_by_time():
+    event = make_event(minutes=180, sessions=0)
+    late = make_session(event, position=1, start=120, minutes=60)
+    early = make_session(event, position=2, start=0, minutes=60)
+    assert list(event.sessions.all()) == [early, late]
+
+
+def test_a_closed_event_stays_closed():
+    event = make_event(status=RoundsEvent.Status.CLOSED)
+    event.status = RoundsEvent.Status.DRAFT
+    with pytest.raises(ValidationError) as err:
+        event.full_clean()
+    assert "status" in err.value.message_dict
+    with pytest.raises(ImmutableRowError):
+        event.save()
+    event.refresh_from_db()
+    assert event.is_closed
+    event.title = "Renamed"  # other edits are still fine
+    event.save()
+
+
+def test_an_open_event_can_move_forward_and_then_close():
+    event = make_event(status=RoundsEvent.Status.DRAFT)
+    for status in (RoundsEvent.Status.PUBLISHED, RoundsEvent.Status.HELD, RoundsEvent.Status.CLOSED):
+        event.status = status
+        event.full_clean()
+        event.save()
 
 
 @pytest.mark.parametrize("credits", ["0.10", "1.30", "-0.25"])
@@ -69,18 +120,19 @@ def test_quarter_multiples_are_accepted(credits):
 
 def test_event_cannot_end_before_it_starts():
     with pytest.raises(IntegrityError), transaction.atomic():
-        make_event(minutes=-10)
-    event = make_event(actual_end_at=at(-30))
+        make_event(minutes=-10, sessions=0)
+    event = make_event()
+    event.end_at = at(-30)
     with pytest.raises(ValidationError):
         event.full_clean()
 
 
 def test_session_position_is_unique_within_an_event():
-    event = make_event()
-    make_session(event, position=1)
+    event = make_event(minutes=120, sessions=0)
+    make_session(event, position=1, minutes=60)
     with pytest.raises(IntegrityError), transaction.atomic():
-        make_session(event, position=1)
-    make_session(make_event(), position=1)
+        make_session(event, position=1, minutes=60)
+    make_session(make_event(sessions=0), position=1)
 
 
 # --- Conflict of interest ----------------------------------------------------

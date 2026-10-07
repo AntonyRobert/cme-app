@@ -161,7 +161,16 @@ class ManualAttendanceForm(SafeModelForm):
 
     class Meta:
         model = AttendanceRecord
-        fields = ["event", "source", "person", "attributed_to", "join_at", "leave_at", "reason"]
+        fields = [
+            "event",
+            "source",
+            "person",
+            "attributed_to",
+            "join_at",
+            "leave_at",
+            "session",
+            "reason",
+        ]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -172,6 +181,9 @@ class ManualAttendanceForm(SafeModelForm):
         self.fields["attributed_to"].help_text = (
             "Room roster only: the row for the device they sat at. Leave the times blank "
             "to copy that row's times."
+        )
+        self.fields["session"].help_text = (
+            "Only with minutes (no times): which session the minutes are for."
         )
 
     def clean(self):
@@ -239,13 +251,14 @@ class AttendanceRecordAdmin(NoDeleteMixin, BaseAdmin):
         "person__emails__email",
     ]
     ordering = ["-event__date", "raw_display_name", "join_at"]
-    list_select_related = ["event", "person", "supersession"]
+    list_select_related = ["event", "person", "supersession", "attributed_to__supersession"]
     autocomplete_fields = ["person", "attributed_to"]
     inlines = [ReplacesInline]
 
     OBSERVED = [
         "source",
         "event",
+        "session",
         "upload",
         "parser_version",
         "raw_display_name",
@@ -280,6 +293,7 @@ class AttendanceRecordAdmin(NoDeleteMixin, BaseAdmin):
                             "join_at",
                             "leave_at",
                             "duration_minutes",
+                            "session",
                             "reason",
                         ]
                     },
@@ -371,6 +385,13 @@ class AttendanceRecordAdmin(NoDeleteMixin, BaseAdmin):
             return "-"
         if obj.is_superseded:
             return format_html("Superseded by {}", admin_link(obj.supersession.new, "a correction"))
+        if obj.attributed_to_id and obj.attributed_to.is_superseded:
+            # The copied times may be the ones that were wrong.
+            return format_html(
+                "<strong>Check:</strong> the device row this copies, {}, was superseded. "
+                "If its times were wrong, so are these.",
+                admin_link(obj.attributed_to, "here"),
+            )
         replaced = list(obj.supersedes.select_related("old"))
         if replaced:
             return format_html(

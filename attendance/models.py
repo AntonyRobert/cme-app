@@ -7,7 +7,7 @@ from django.utils import timezone
 from core.models import AppendOnlyMixin, FrozenFieldsMixin, UUIDModel
 from people.models import Person
 from people.ownership import PersonOwnedQuerySet
-from rounds.models import RoundsEvent
+from rounds.models import RoundsEvent, Session
 
 
 class AttendanceUpload(FrozenFieldsMixin, UUIDModel):
@@ -92,6 +92,7 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
         "upload",
         "parser_version",
         "event",
+        "session",
         "raw_display_name",
         "raw_email",
         "raw_participant_role",
@@ -116,6 +117,15 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
     parser_version = models.CharField(max_length=50, null=True, blank=True)
     event = models.ForeignKey(
         RoundsEvent, on_delete=models.PROTECT, related_name="attendance_records"
+    )
+    session = models.ForeignKey(
+        Session,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="attendance_records",
+        help_text="Only for a row without join and leave times: which session the "
+        "minutes belong to. Timed rows are matched to sessions by their times.",
     )
     raw_display_name = models.CharField(max_length=300, null=True, blank=True)
     # Exactly as Teams wrote it, so not lowercased. Matching lowercases.
@@ -178,6 +188,12 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
             models.CheckConstraint(
                 condition=Q(join_at__isnull=True) | Q(leave_at__gte=F("join_at")),
                 name="attendancerecord_leave_after_join",
+            ),
+            # Minutes without times have to belong to a session, or they
+            # could not be credited to one.
+            models.CheckConstraint(
+                condition=Q(join_at__isnull=False) | Q(session__isnull=False),
+                name="attendancerecord_hours_only_needs_session",
             ),
             models.CheckConstraint(
                 condition=Q(source="teams_upload")
@@ -253,6 +269,13 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
             errors["leave_at"] = "Give both join and leave times, or neither."
         elif self.join_at and self.leave_at < self.join_at:
             errors["leave_at"] = "Leave time is before join time."
+        if self.join_at is None and self.leave_at is None:
+            if self.session_id is None:
+                errors["session"] = "Minutes without times must say which session they are for."
+            elif self.event_id and self.session.event_id != self.event_id:
+                errors["session"] = "That session belongs to a different event."
+        elif self.session_id is not None:
+            errors["session"] = "Timed rows are matched to sessions by their times; leave this blank."
         if self.duration_seconds is None:
             errors["duration_seconds"] = "Give a duration, or join and leave times."
         if errors:

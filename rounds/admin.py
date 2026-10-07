@@ -12,7 +12,7 @@ from .models import COIDeclaration, LearningObjective, RoundsEvent, Session, Ses
 class SessionInline(admin.TabularInline):
     model = Session
     form = SafeModelForm
-    fields = ["position", "title", "duration_minutes", "submitted_at"]
+    fields = ["position", "title", "start_at", "end_at", "submitted_at"]
     show_change_link = True
 
     def get_extra(self, request, obj=None, **kwargs):
@@ -34,16 +34,15 @@ class RoundsEventAdmin(BaseAdmin):
     date_hierarchy = "date"
     search_fields = ["title", "teams_meeting_id", "sessions__title"]
     inlines = [SessionInline]
-    readonly_fields = ["credit_window_display", "credit_summary"]
+    readonly_fields = ["credit_summary"]
     fieldsets = [
         (None, {"fields": ["title", "date", "status", "accredited_credits"]}),
-        ("Schedule", {"fields": ["start_at", "end_at"]}),
         (
-            "What actually happened",
+            "Schedule",
             {
-                "fields": ["actual_start_at", "actual_end_at", "credit_window_display"],
-                "description": "Leave blank if rounds ran to schedule. If it started late or "
-                "ran over, set these once and everyone's credit follows.",
+                "fields": ["start_at", "end_at"],
+                "description": "The outer bounds. Attended time is counted against the "
+                "sessions' own times, below. If a session ran over, change its end time.",
             },
         ),
         ("Teams", {"fields": ["teams_join_url", "teams_meeting_id"]}),
@@ -92,13 +91,6 @@ class RoundsEventAdmin(BaseAdmin):
         url = changelist_url(AttendanceRecord, event__id__exact=obj.pk, matched="no")
         return format_html('<a href="{}"><strong>{} to review</strong></a>', url, obj._unmatched)
 
-    @admin.display(description="Time that counts")
-    def credit_window_display(self, obj):
-        if not obj.pk:
-            return "-"
-        start, end = (timezone.localtime(value) for value in obj.credit_window())
-        return f"{start:%Y-%m-%d %H:%M} to {end:%H:%M} (includes 5 minutes before the start)"
-
     @admin.display(description="Per person")
     def credit_summary(self, obj):
         """Computed live from attendance and evaluations. Nothing here is stored."""
@@ -109,30 +101,33 @@ class RoundsEventAdmin(BaseAdmin):
         rows = event_credit_rows(obj)
         if not rows:
             return "No matched attendance or evaluations yet."
+        total = obj.sessions.count()
         body = format_html_join(
             "",
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>"
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>"
             "<td><strong>{}</strong></td><td>{}</td></tr>",
             (
                 (
                     admin_link(person),
-                    b.time.minutes,
-                    (b.time.source or "-").replace("_", " "),
-                    "-" if b.time.self_reported_minutes is None else b.time.self_reported_minutes,
-                    "Done" if b.gate_passed else "Missing",
+                    b.minutes,
+                    (b.source or "-").replace("_", " "),
+                    f"{len(b.sessions_attended)}/{total}",
+                    f"{len(b.sessions_evaluated)}/{total}",
+                    b.credited_minutes,
                     f"{b.computed_credits} {b.adjustment_credits:+}"
                     if b.adjustment_credits
                     else b.computed_credits,
                     b.credits,
-                    "Review: " + "; ".join(b.time.review_reasons) if b.time.needs_review else "",
+                    "Review: " + "; ".join(b.review_reasons) if b.needs_review else "",
                 )
                 for person, b in rows
             ),
         )
         return format_html(
             "<table><thead><tr><th>Person</th><th>Minutes</th><th>From</th>"
-            "<th>Self-reported</th><th>Evaluation</th><th>Computed (+ adjustment)</th>"
-            "<th>Credits</th><th></th></tr></thead><tbody>{}</tbody></table>",
+            "<th>Sessions attended</th><th>Evaluated</th><th>Minutes credited</th>"
+            "<th>Computed (+ adjustment)</th><th>Credits</th><th></th></tr></thead>"
+            "<tbody>{}</tbody></table>",
             body,
         )
 
@@ -198,7 +193,7 @@ class MissingCOIFilter(admin.SimpleListFilter):
 
 @admin.register(Session)
 class SessionAdmin(BaseAdmin):
-    list_display = ["event", "position", "title", "presenter_names", "duration_minutes", "submitted"]
+    list_display = ["event", "position", "title", "times", "presenter_names", "submitted"]
     list_display_links = ["title"]
     list_filter = [SubmittedFilter, MissingCOIFilter, "event__status"]
     date_hierarchy = "event__date"
@@ -211,7 +206,14 @@ class SessionAdmin(BaseAdmin):
     inlines = [SessionPresenterInline, LearningObjectiveInline]
     actions = ["attach_declarations"]
     fieldsets = [
-        (None, {"fields": ["event", "position", "title", "duration_minutes", "submitted_at"]}),
+        (
+            None,
+            {
+                "fields": ["event", "position", "title", "start_at", "end_at", "submitted_at"],
+                "description": "Attended time is clamped to these times. Leave the end blank "
+                "for one hour after the start.",
+            },
+        ),
         (
             "Blurb",
             {
@@ -223,6 +225,11 @@ class SessionAdmin(BaseAdmin):
 
     def get_queryset(self, request):
         return super().get_queryset(request).prefetch_related("session_presenters__person")
+
+    @admin.display(description="Time", ordering="start_at")
+    def times(self, obj):
+        start, end = timezone.localtime(obj.start_at), timezone.localtime(obj.end_at)
+        return f"{start:%H:%M}-{end:%H:%M}"
 
     @admin.display(description="Presenters")
     def presenter_names(self, obj):

@@ -1,11 +1,11 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from core.constraints import is_quarter_multiple, validate_quarter_multiple
-from core.models import AppendOnlyMixin, UUIDModel
+from core.models import AppendOnlyMixin, FrozenFieldsMixin, UUIDModel
 from people.models import Person
 from people.ownership import PersonOwnedQuerySet
 from rounds.models import LearningObjective, RoundsEvent, Session
@@ -17,8 +17,9 @@ class EvaluationSubmission(UUIDModel):
     person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="evaluations")
     session = models.ForeignKey(Session, on_delete=models.PROTECT, related_name="evaluations")
     submitted_at = models.DateTimeField(default=timezone.now)
-    self_reported_minutes = models.PositiveSmallIntegerField(
-        help_text="What they say they attended. Only used when there is no attendance record."
+    self_reported_session_minutes = models.PositiveSmallIntegerField(
+        help_text="How long they say they attended this session. Only used when there "
+        "is no attendance record."
     )
     attestation = models.BooleanField(help_text="They confirm the minutes are accurate.")
     is_complete = models.BooleanField(
@@ -42,9 +43,24 @@ class EvaluationSubmission(UUIDModel):
         return f"{self.person} on {self.session}"
 
     def clean(self):
+        from .windows import submission_allowed
+
         super().clean()
         if not self.attestation:
             raise ValidationError({"attestation": "The attestation is required."})
+        if self._state.adding and self.person_id and self.session_id:
+            if not submission_allowed(self.person, self.session):
+                raise ValidationError(
+                    "The evaluation window for this session has closed. "
+                    "Grant a reopening first (Evaluation windows)."
+                )
+
+    def save(self, *args, **kwargs):
+        from .windows import close_windows
+
+        super().save(*args, **kwargs)
+        if self.is_complete:
+            close_windows(self.person, self.session)
 
 
 class EvaluationResponseQuerySet(PersonOwnedQuerySet):
@@ -84,6 +100,56 @@ class EvaluationResponse(UUIDModel):
 
     def __str__(self):
         return f"{self.question_key}: {self.rating if self.rating is not None else 'text'}"
+
+
+class EvaluationWindow(FrozenFieldsMixin, UUIDModel):
+    """
+    A reopened evaluation form for one person and one session.
+
+    The form is open for a week after the event by default. After that,
+    an attendee can ask for another week; the request is granted
+    automatically (they did the attending, the form is work they still
+    owe) and logged. The window closes when they submit a complete
+    evaluation, or when it expires.
+    """
+
+    FROZEN_FIELDS = ("person", "session", "opened_at", "expires_at", "reason", "granted_by")
+
+    person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="evaluation_windows")
+    session = models.ForeignKey(
+        Session, on_delete=models.PROTECT, related_name="evaluation_windows"
+    )
+    opened_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+    reason = models.TextField(blank=True)
+    granted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="+",
+        help_text="Blank when the attendee asked for it themselves.",
+    )
+    closed_at = models.DateTimeField(
+        null=True, blank=True, help_text="Set when a complete evaluation is submitted."
+    )
+
+    objects = PersonOwnedQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["-opened_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(expires_at__gt=F("opened_at")), name="evaluationwindow_expires_later"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.person} for {self.session} until {timezone.localtime(self.expires_at):%Y-%m-%d}"
+
+    def is_open(self, at=None):
+        at = at or timezone.now()
+        return self.closed_at is None and self.opened_at <= at < self.expires_at
 
 
 class CreditAdjustment(AppendOnlyMixin, UUIDModel):

@@ -21,6 +21,7 @@ pytestmark = pytest.mark.django_db
 
 FRAUD_SURFACE = {
     "credits.add_creditadjustment",
+    "credits.add_evaluationwindow",
     "certificates.issue_certificate",
     "certificates.revoke_certificate",
 }

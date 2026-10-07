@@ -121,7 +121,7 @@ def test_credit_comes_together_after_a_merge(pair, staff):
     """The reason merges exist: Teams on one address, the form on another."""
     survivor, duplicate = pair
     event = make_event()
-    session = make_session(event)
+    session = event.sessions.get()
     teams_row(event, duplicate, 0, 60)
     evaluate(survivor, session, minutes=0)
     assert event_credits(survivor, event) == Decimal("0.00")
@@ -269,6 +269,7 @@ def test_every_link_to_a_person_is_accounted_for():
         ("certificates.certificate", "person"),
         ("credits.creditadjustment", "person"),
         ("credits.evaluationsubmission", "person"),
+        ("credits.evaluationwindow", "person"),
         ("people.personemail", "person"),
         ("rounds.coideclaration", "person"),
         ("rounds.sessionpresenter", "person"),

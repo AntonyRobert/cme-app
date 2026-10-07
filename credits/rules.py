@@ -5,7 +5,7 @@ Nothing here is stored. Credit is derived from attendance and evaluation
 every time it is asked for; the only frozen numbers are on an issued
 certificate.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import ROUND_FLOOR, Decimal
 
 from django.db.models import Sum
@@ -17,12 +17,17 @@ from .models import CreditAdjustment, EvaluationSubmission
 
 ZERO = Decimal("0.00")
 
+# Attending all but this much of a session counts as the whole session.
+# Symmetric with the grace before the first session: joining a minute late
+# is not worth a quarter credit.
+FULL_SESSION_TOLERANCE_MINUTES = 5
+
 # A self-report this much higher than the recorded minutes gets a human look.
 REVIEW_THRESHOLD_MINUTES = 15
 
 REVIEW_CLAIMS_MORE = "claims more than was recorded"
 REVIEW_SELF_REPORTED_ONLY = "self-reported only"
-REVIEW_OVER_EVENT_LENGTH = "rows add up to more than the event lasted (duplicate manual row?)"
+REVIEW_OVER_SESSION_LENGTH = "rows add up to more than a session lasted (duplicate manual row?)"
 
 
 def round_credits(hours):
@@ -30,8 +35,8 @@ def round_credits(hours):
     Round DOWN to the nearest quarter credit.
 
     Down, because overstating credit is the error that can't be recovered
-    from. Called once per event, so a certificate's total is exactly the sum
-    of its lines.
+    from. Called once per event, on the minutes of the sessions that are
+    unlocked, so a certificate's total is exactly the sum of its lines.
     """
     hours = Decimal(hours)
     if hours <= 0:
@@ -39,84 +44,99 @@ def round_credits(hours):
     return ((hours / QUARTER).to_integral_value(rounding=ROUND_FLOOR) * QUARTER).quantize(ZERO)
 
 
-def evaluation_gate(person, event):
+def qualifying_minutes(minutes, session_length_minutes):
     """
-    Has this person done the evaluation that credit for this event requires?
+    The minutes a session is credited for: within
+    FULL_SESSION_TOLERANCE_MINUTES of the whole session counts as the whole
+    session. 59 of 60 is 60; 52 of 60 is 52.
+    """
+    if minutes >= session_length_minutes - FULL_SESSION_TOLERANCE_MINUTES:
+        return session_length_minutes
+    return minutes
 
-    THE RULE IS STILL OPEN (docs/decisions.md). This is the lenient
-    candidate: at least one complete evaluation for any session of the
-    event. Change the rule here and nowhere else.
+
+def evaluation_gate(person, session):
+    """
+    Is this session's credit unlocked? Yes when the person has a complete
+    evaluation of THAT session. Each session is gated on its own.
     """
     return (
         EvaluationSubmission.objects.for_person(person)
-        .filter(session__event=event, is_complete=True)
+        .filter(session=session, is_complete=True)
         .exists()
     )
 
 
 @dataclass(frozen=True)
-class CreditableTime:
-    minutes: int
+class SessionCredit:
+    """One person's standing on one session."""
+
+    session: object
+    minutes: int  # creditable minutes: recorded, or the self-report fallback
     source: str | None  # a MinutesSource value; None when there is nothing at all
-    recorded_minutes: int | None  # None when there are no attendance rows
-    self_reported_minutes: int | None  # None when there are no evaluations
-    review_reasons: tuple = ()  # why a human should look; empty when fine
+    attended: bool  # at least half the session, by recorded attendance
+    evaluated: bool  # a complete evaluation of this session exists
+    self_reported_minutes: int | None  # None when there is no evaluation
+    review_reasons: tuple = ()
+
+    @property
+    def qualifying_minutes(self):
+        return qualifying_minutes(self.minutes, self.session.length_minutes)
+
+    @property
+    def credited_minutes(self):
+        """What counts toward the event's credit: nothing until evaluated."""
+        return self.qualifying_minutes if self.evaluated else 0
+
+
+@dataclass(frozen=True)
+class CreditBreakdown:
+    """Everything behind one person's credit for one event. What a certificate line snapshots."""
+
+    sessions: list = field(default_factory=list)  # SessionCredit, in session order
+    source: str | None = None
+    computed_credits: Decimal = ZERO
+    adjustment_credits: Decimal = ZERO
+
+    @property
+    def credits(self):
+        return max(self.computed_credits + self.adjustment_credits, ZERO)
+
+    @property
+    def minutes(self):
+        return sum(s.minutes for s in self.sessions)
+
+    @property
+    def credited_minutes(self):
+        return sum(s.credited_minutes for s in self.sessions)
+
+    @property
+    def sessions_attended(self):
+        return [s.session for s in self.sessions if s.attended]
+
+    @property
+    def sessions_evaluated(self):
+        return [s.session for s in self.sessions if s.evaluated]
+
+    @property
+    def review_reasons(self):
+        seen = []
+        for s in self.sessions:
+            for reason in s.review_reasons:
+                if reason not in seen:
+                    seen.append(reason)
+        return tuple(seen)
 
     @property
     def needs_review(self):
         return bool(self.review_reasons)
 
-
-def self_reported_minutes(person, event):
-    """Sum of what the person claimed across the event's sessions, or None."""
-    return (
-        EvaluationSubmission.objects.for_person(person)
-        .filter(session__event=event)
-        .aggregate(total=Sum("self_reported_minutes"))["total"]
-    )
-
-
-def creditable_minutes(person, event):
-    """
-    The minutes credit is based on.
-
-    Recorded attendance wins whenever any exists, even if it adds up to
-    zero. Self-reported minutes are only the fallback for someone with no
-    attendance rows at all (their connection died, or they phoned in under
-    a name nobody could match).
-
-    needs_review is set when the person claims more than was recorded, by
-    more than REVIEW_THRESHOLD_MINUTES: that is the sign of a missing or
-    unmatched attendance row. Claiming less is not flagged, because a
-    person who evaluated one session of three has only reported on that
-    one. It is also set whenever credit rests on a self-report alone, so
-    nobody gets credit from an unchecked claim silently, and when hours-only
-    rows added up to more than the event lasted.
-    """
-    recorded = attended_minutes(person, event)
-    claimed = self_reported_minutes(person, event)
-    if recorded.has_rows:
-        reasons = []
-        if claimed is not None and claimed - recorded.minutes > REVIEW_THRESHOLD_MINUTES:
-            reasons.append(REVIEW_CLAIMS_MORE)
-        if recorded.capped_seconds:
-            reasons.append(REVIEW_OVER_EVENT_LENGTH)
-        return CreditableTime(
-            minutes=recorded.minutes,
-            source=recorded.source,
-            recorded_minutes=recorded.minutes,
-            self_reported_minutes=claimed,
-            review_reasons=tuple(reasons),
-        )
-    if claimed is None:
-        return CreditableTime(0, None, None, None)
-    return CreditableTime(
-        minutes=min(claimed, event.length_seconds // 60),
-        source=MinutesSource.SELF_REPORTED,
-        recorded_minutes=None,
-        self_reported_minutes=claimed,
-        review_reasons=(REVIEW_SELF_REPORTED_ONLY,),
-    )
+    @property
+    def self_reported_minutes(self):
+        claimed = [
+            s.self_reported_minutes for s in self.sessions if s.self_reported_minutes is not None
+        ]
+        return sum(claimed) if claimed else None
 
 
 def adjustment_credits(person, event):
@@ -129,39 +149,85 @@ def adjustment_credits(person, event):
     return (total or ZERO).quantize(ZERO)
 
 
-@dataclass(frozen=True)
-class CreditBreakdown:
-    """Everything behind one person's credit for one event. What a certificate line snapshots."""
+def creditable_time(person, event):
+    """
+    The minutes credit is based on, per session: a list of SessionCredit
+    and the overall source.
 
-    time: CreditableTime
-    gate_passed: bool
-    computed_credits: Decimal
-    adjustment_credits: Decimal
+    Recorded attendance wins whenever any exists for the event, even if a
+    session's share is zero. Self-reported minutes are only the fallback
+    for someone with no attendance rows at all (their connection died, or
+    they phoned in under a name nobody could match), and only for the
+    sessions they evaluated.
 
-    @property
-    def credits(self):
-        return max(self.computed_credits + self.adjustment_credits, ZERO)
+    review_reasons: a self-report more than REVIEW_THRESHOLD_MINUTES above
+    the recorded minutes (the sign of a missing or unmatched row), credit
+    resting on a self-report alone, or hours-only rows adding up to more
+    than a session lasted.
+    """
+    recorded = attended_minutes(person, event)
+    submissions = {
+        s.session_id: s
+        for s in EvaluationSubmission.objects.for_person(person).filter(session__event=event)
+    }
+    result = []
+    for session in event.sessions.order_by("start_at", "position"):
+        submission = submissions.get(session.pk)
+        claimed = submission.self_reported_session_minutes if submission else None
+        evaluated = bool(submission and submission.is_complete)
+        reasons = []
+        if recorded.has_rows:
+            share = recorded.for_session(session)
+            minutes = share.minutes
+            source = recorded.source
+            attended = share.attended
+            if claimed is not None and claimed - minutes > REVIEW_THRESHOLD_MINUTES:
+                reasons.append(REVIEW_CLAIMS_MORE)
+            if share.capped_seconds:
+                reasons.append(REVIEW_OVER_SESSION_LENGTH)
+        elif claimed is not None:
+            minutes = min(claimed, session.length_minutes)
+            source = MinutesSource.SELF_REPORTED
+            attended = False
+            reasons.append(REVIEW_SELF_REPORTED_ONLY)
+        else:
+            minutes, source, attended = 0, None, False
+        result.append(
+            SessionCredit(
+                session=session,
+                minutes=minutes,
+                source=source,
+                attended=attended,
+                evaluated=evaluated,
+                self_reported_minutes=claimed,
+                review_reasons=tuple(reasons),
+            )
+        )
+    source = recorded.source
+    if source is None and any(s.source == MinutesSource.SELF_REPORTED for s in result):
+        source = MinutesSource.SELF_REPORTED
+    return result, source
 
 
 def credit_breakdown(person, event):
     """
     The credit calculation:
 
-        computed = 0 if the evaluation gate fails, otherwise
-                   min(round_credits(minutes / 60), event.accredited_credits)
-        credits  = max(computed + adjustments, 0)
+        per session: qualifying minutes, counted only if that session has a
+                     complete evaluation
+        computed   = min(round_credits(sum of counted minutes / 60),
+                         event.accredited_credits)
+        credits    = max(computed + adjustments, 0)
+
+    Rounding happens once, on the event total, so three 20-minute sessions
+    attended in full are 1.00 credit, not three times 0.25.
     """
-    time = creditable_minutes(person, event)
-    gate_passed = evaluation_gate(person, event)
-    if gate_passed:
-        computed = min(
-            round_credits(Decimal(time.minutes) / 60), event.accredited_credits
-        ).quantize(ZERO)
-    else:
-        computed = ZERO
+    sessions, source = creditable_time(person, event)
+    credited = sum(s.credited_minutes for s in sessions)
+    computed = min(round_credits(Decimal(credited) / 60), event.accredited_credits).quantize(ZERO)
     return CreditBreakdown(
-        time=time,
-        gate_passed=gate_passed,
+        sessions=sessions,
+        source=source,
         computed_credits=computed,
         adjustment_credits=adjustment_credits(person, event),
     )

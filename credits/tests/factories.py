@@ -8,7 +8,7 @@ def evaluate(person, session, *, minutes=20, complete=True, **extra):
     return EvaluationSubmission.objects.create(
         person=person,
         session=session,
-        self_reported_minutes=minutes,
+        self_reported_session_minutes=minutes,
         attestation=True,
         is_complete=complete,
         **extra,

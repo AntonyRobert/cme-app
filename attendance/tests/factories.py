@@ -44,7 +44,12 @@ def teams_row(event, person, start, end, *, upload=None, user=None, **extra):
 
 
 def manual_row(event, person, *, minutes=None, start=None, end=None, user=None, **extra):
-    """A hand-entered row: hours-only when `minutes` is given, timed otherwise."""
+    """
+    A hand-entered row: hours-only when `minutes` is given (for the event's
+    first session unless `session` is passed), timed otherwise.
+    """
+    if minutes is not None and "session" not in extra:
+        extra["session"] = event.sessions.order_by("start_at").first()
     return AttendanceRecord.objects.create(
         source=Source.MANUAL,
         event=event,
