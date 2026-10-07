@@ -415,7 +415,7 @@ the old rows, and the matches pointing at them, on a re-parse is **not yet desig
 | --- | --- | --- |
 | id | UUID pk | |
 | source | enum | teams_upload, signin_sheet, qr_signin, manual, room_roster |
-| upload | FK AttendanceUpload, nullable | The Teams export or sign-in sheet the row came from. Null for QR and hand-entered rows |
+| upload | FK AttendanceUpload, nullable | The Teams export the row came from. Null for sign-in sheet, QR and hand-entered rows |
 | parser_version | text, nullable | Null for anything entered by hand |
 | event | FK RoundsEvent | Denormalized for query speed |
 | session | FK Session, nullable | Which session a row without times belongs to: hours-only manual rows, sign-in sheet ticks and QR scans. Check constraint: a row without times must have one, and vice versa |
@@ -462,7 +462,7 @@ inflating the credit. Also checked: `old != new`, and both rows share an `event`
 
 ### Three sources, reconciled
 
-A Teams export, an uploaded sign-in sheet and a QR scan are three **independent claims**
+A Teams export, a typed-in sign-in sheet and a QR scan are three **independent claims**
 about the same person in the same session. Each under-reports differently: Teams misses
 the person physically in the room, a QR scan misses someone who left early, a paper sheet
 proves presence but not duration. They are **never merged arithmetically**. Someone who
@@ -478,9 +478,17 @@ appears in all three shows three rows and one proposed figure, not the sum.
 
 **Proposed minutes per session = the highest claim among the sources, capped at the
 session's length.** Highest, because every source under-reports; capped, because no source
-can exceed the talk. Within one source, rows still combine the way they always did (the
-union of a person's Teams intervals). Sources disagreeing by more than a few minutes are
-flagged for a human; sources agreeing are signed off in bulk (see sign-off below).
+can exceed the talk. Sources disagreeing by more than the program's
+`attendance_disagreement_minutes` (default 5) are flagged for a human; sources agreeing
+are signed off in bulk (see sign-off below).
+
+The independent claims are the **sensors**, not the five `source` values. `manual` and
+`room_roster` rows are staff corrections to what the devices recorded, so they combine
+with `teams_upload` rows into one **recorded** claim (the union of the person's intervals
+plus any hours-only rows, as before). The sign-in sheet and QR scans are the other two
+claims. A row that is only a tick or a scan, with nothing recorded, is proposed at the
+whole session but flagged `tick_only` and held back from bulk sign-off: a human confirms
+that presence on paper alone is enough.
 
 All sources are `AttendanceRecord` rows with distinct `source` values, so supersession,
 matching and the review queue work unchanged.
@@ -519,17 +527,17 @@ What the file actually is, from a real export (the anonymized copy is
 
 ### The sign-in sheet
 
-For people attending in person who did not scan. Exported per event as a spreadsheet:
-one row per known person of the program (name, credential, affiliation), one column per
-session to tick, and blank rows at the bottom for walk-ins. Whoever transcribes the paper
-ticks boxes rather than typing names, which keeps spelling variants out of the match
-queue.
+For people attending in person who did not scan. The paper sheet is **typed in directly**
+on an entry screen in the admin ("Import paper sign-in sheet"), not exported and uploaded
+as a spreadsheet: one row per known person of the program, one checkbox per session,
+and a way to add a walk-in by name. Whoever transcribes the paper ticks boxes rather than
+typing names, which keeps spelling variants out of the match queue.
 
-A hidden column carries each row's person id, and a hidden cell carries the event id with
-a signature over it (`HMAC(SECRET_KEY, event id)`), so the upload is matched on ids, never
-on names, and a sheet exported for one event is refused for another. A tick becomes an
-`AttendanceRecord` with `source = signin_sheet`, the session, and a claim of the whole
-session. Walk-in rows (name, no id) land in the review queue like any unmatched row.
+A tick becomes an `AttendanceRecord` with `source = signin_sheet`, `created_by` the staff
+member, the session, no upload and a claim of the whole session. Walk-ins are typed as a
+name and land in the review queue like any unmatched row. The sitting is audit-logged
+once, with the rows it wrote. Spreadsheet upload of the sheet is deferred: the typed-in
+sheet is simpler to support and leaves nothing to parse.
 
 ### QR sign-in
 
@@ -547,8 +555,8 @@ session; a second scan of the same session by the same person is ignored (unique
 
 ### Upload preview: nothing is stored until confirmed
 
-Every import, Teams export, sign-in sheet or QR batch, shows what the system understood
-before it commits:
+Every file import (today only the Teams export) shows what the system understood before
+it commits:
 
 - which event matched, and for a Teams export which date reading was chosen and why;
 - every participant, matched or not, their proposed minutes per session, and which
@@ -652,6 +660,11 @@ it until the queue is cleared or the rows are superseded.
 proposed and confirmed credit; a certificate is issued from confirmed minutes only, and
 the issue action refuses while any event in the period has unconfirmed rows for the
 person.
+
+**Who signs off.** Anyone who can change the event: coordinators and program admins of
+its program. Read-only staff see the event but not the sign-off page. The decision records
+`confirmed_by`, and the sitting is audit-logged (`attendance.event_confirmed`,
+`attendance.person_confirmed`).
 
 ### Manual corrections and room attendance
 

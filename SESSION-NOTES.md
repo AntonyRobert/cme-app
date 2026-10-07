@@ -3,7 +3,121 @@
 Written 2026-10-06, updated the same day after your review (sections A to H). Covers
 everything built in the first session: environment setup, the pre-build review, step 1 of
 the build order (models, migrations, admin, tests), and the per-session credit redesign.
-Step 2 has not been started. Nothing has been pushed; the repo has no remote.
+Nothing has been pushed; the repo has no remote. Round four (the design review) is the
+newest section.
+
+## Round four: the design review, groups 1 to 5
+
+Written 2026-10-07. Groups 1 to 5 of the order in your review are built: exact
+certificates, Institution and Program, the three sources reconciled, the upload preview,
+and sign-off. QR sign-in and the paper sign-in sheet entry screen are **not started**.
+Nothing pushed.
+
+### What was built
+
+- **Exact certificates** (`cbcabde`). The total is the sum of the lines to the cent; no
+  rounding at issue. `certificate_total()` is the one function.
+- **Institution and Program** (`8a2e362`). `programs` app: `Institution`, `Program`
+  (series name, rates per hour for attendance and teaching, default accredited credits,
+  accreditation year end, COI question version, `attendance_disagreement_minutes` default
+  5, `retention_years` default 7, `is_active`), `ProgramRole` (coordinator, program admin,
+  read only) per user per program. `RoundsEvent.program` and `Certificate.program` are
+  required FKs. Staff see only their programs' rows in every admin (`ProgramScopedAdminMixin`
+  on top of `core/authz.py`); the authorization walk covers program scope. A user with
+  different roles in two programs is tested to get each role's permissions in each.
+  `CREDIT_RATES_PER_HOUR` is gone; `SERIES_NAME`, `COI_CURRENT_VERSION` and
+  `ACCREDITATION_YEAR_END` stay only as defaults for a new program.
+- **Magic-link sign-in** (`2e5c85b`). `signin` app: email in, 15-minute single-use token
+  (hash stored), 5 per email and 20 per IP an hour, 90-day session, sign out everywhere
+  via `Person.sessions_revoked_at`. `/me/` shows credits per program at that program's
+  rates. Console email backend in dev. Staff admin logins are not attendee sessions.
+- **Three sources reconciled** (this commit). `AttendanceRecord.source` gains
+  `signin_sheet` and `qr_signin`. `attended_minutes()` groups rows into claims, proposes
+  the highest claim per session capped at the session, and flags `disagree` (more than the
+  program's threshold apart) and `tick_only` (nothing recorded, only a tick or a scan).
+  QR is one scan per person per session (partial unique index); merging two people whose
+  scans collide is refused like any other collision.
+- **Upload preview** (this commit). Adding a Teams export no longer stores anything: the
+  bytes wait in `UPLOAD_ROOT/pending/<sha>` with no database row and no audit entry, and
+  the reviewer sees the matched event, the date reading and why, every participant with
+  minutes per session, the rule stated on screen, and the rows worth a look (matches
+  nobody, checksum, disagrees with a stored claim by more than the threshold). Confirm
+  stores and imports; cancel discards; pending files older than a day are purged by
+  `attendance.preview.purge()` (no scheduler yet; call it from the backup script or a
+  management command when deployment comes).
+- **Sign-off** (this commit). `SessionAttendanceDecision`: append-only, one person one
+  session, confirmed and proposed minutes, basis, the claims it was based on, a comment
+  that the database requires when the figure differs from the proposal, `supersedes`.
+  `attendance/signoff.py`: `review(event)`, `confirm_event()` (confirm with exceptions, per
+  session not per person), `confirm_person()`. The event admin has a "Review and sign off
+  attendance" page: one button for the event, a per-person form with a checkbox and a
+  minutes box per session, held reasons shown per row, a banner with the unmatched count
+  linking to the match queue. The changelist shows signed-off / total per event.
+- **Credit and certificates on confirmed minutes.** `credit_breakdown` reports proposed
+  and confirmed attendance credit and which sessions await sign-off. `certificate_figures`
+  raises `NotSignedOff` while any session in the period is unconfirmed, so a certificate
+  cannot be issued from proposed minutes. `/me/` shows "pending sign-off" until the event
+  is confirmed, then "not yet certified" until a certificate is issued.
+- **The sign-in sheet is typed in, not uploaded** (your note mid-build). `signin_sheet`
+  rows carry no upload: `created_by` and one audit entry per sitting are the provenance.
+  The constraint and docs are updated (`0005_signin_sheet_is_typed_in`). The entry screen
+  itself is the next piece.
+
+### Decisions this round that your review did not settle
+
+- **Manual and room-roster rows are not a fourth sensor.** They are staff corrections to
+  the device record, so they combine with the Teams rows into one "recorded" claim. Four
+  independent claims would have made every manual correction "disagree" with the Teams row
+  it was correcting. Recorded in data-model.md and decisions.md.
+- **Tick-only rows are proposed at the whole session but held back from bulk sign-off**,
+  as you asked. A human confirms them one by one; the basis is `highest_claim`.
+- **Confirming at the proposal when the row was held** (a disagreement the reviewer
+  accepts as is) gets basis `highest_claim`, not `sources_agree`, so the audit trail shows
+  someone looked.
+- **Who signs off:** anyone with change permission on the event (coordinators and program
+  admins). Read-only staff get 403. I did not add a separate sign-off permission: the
+  roles already encode it, and a fourth role is more to explain.
+- **A superseding decision needs no new comment when it returns to the proposal**; it
+  needs one when it differs, like the first. The database check enforces this on every
+  row, so the admin cannot be bypassed by a shell session.
+- **An admin page for an object outside the user's programs redirects with a message**
+  (Django's own behaviour for a missing object) rather than 404; the sign-off and preview
+  pages, which are custom views, return 404. Both leak nothing. Tests assert each.
+- **Migrated events went to the default program** "Emergency Medicine" (`em`), created by
+  the migration with the previous settings values as its rates. Rename or reassign in the
+  admin if that is wrong.
+- **The COI version for a declaration entered by staff** comes from the program of the
+  event being edited, falling back to the first program the staff member has a role in.
+- **`Program.retention_years`** is stored and editable, default 7. No deletion or
+  anonymization logic, per your note; still open in decisions.md.
+- **Pending uploads are files, not rows.** A half-finished preview leaves a file in
+  `pending/` and nothing else, so nothing in the database can be "stored but not
+  confirmed". The cost is that a crash between confirm and import leaves the pending file
+  for the purge to remove, which is the right side to fail on.
+
+### Deviations
+
+- Group 5's "sign-in sheet upload" is replaced by typed-in entry, as you said. The
+  `UPLOADED_SOURCES` set is now Teams only. If spreadsheet upload comes back later it can
+  reuse the pending-and-preview flow unchanged.
+- The preview shows minutes per session from the raw intervals, before supersession and
+  matching run; the sign-off page is the authoritative figure. The two agree for a clean
+  file, and the preview says it is a preview.
+
+### Unsure
+
+- `confirm_event` re-runs `review()` for the whole event; at a few dozen people and three
+  sessions that is instant, at a few hundred it is still fine, but it is O(people) queries
+  and would want prefetching before a program with large attendance.
+- The sign-off page is one long page of per-person forms. For forty people that is a
+  scroll; for two hundred it wants a filter (held only / all). Not built; the "held" list
+  at the top is the workaround.
+- The pending purge has no trigger. A `purge_pending` management command run from cron on
+  the server is the obvious answer; I left it for the deployment step rather than invent a
+  scheduler now.
+- `signin_sheet` rows have no reason text, by design, but also no batch id tying the rows
+  of one sitting together beyond the audit entry. If a sheet has to be withdrawn as a
+  whole, the audit entry's row list is what you would supersede from.
 
 ## Round three: the real export, and two kinds of credit
 

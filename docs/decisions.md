@@ -236,7 +236,11 @@ room, QR misses someone who left early, paper proves presence but not duration. 
 proposed figure per session is the highest claim, capped at the session's length: highest
 because every source under-reports, capped because no source can exceed the talk. Someone
 in all three shows three rows and one figure. All sources are `AttendanceRecord` rows, so
-supersession and aggregation are unchanged.
+supersession and aggregation are unchanged. Manual and room-roster rows are staff
+corrections to the device record, not a fourth sensor, so they form one "recorded" claim
+together with the Teams rows. The disagreement threshold is per program
+(`attendance_disagreement_minutes`, default 5). A row that is only a tick or a scan is
+flagged and held back from bulk sign-off rather than confirmed silently.
 
 **Every import is previewed before anything is stored.**
 Which event matched and which date reading was chosen; every participant with their
@@ -262,11 +266,13 @@ The displayed code rotates every thirty seconds so a photographed code texted to
 at home does not work, and the page it opens requires sign-in so a scan is tied to a
 person, never a typed name.
 
-**The paper sign-in sheet is pre-filled and carries hidden ids.**
-One row per known person, a column per session, blank rows for walk-ins. Transcribing is
-ticking boxes, which keeps spelling variants out of the match queue; re-import matches on
-the hidden person id, and a hidden signed event id means a sheet is refused for any event
-but its own. It goes through the same preview-and-confirm flow as a Teams export.
+**The paper sign-in sheet is typed in, not uploaded.**
+An entry screen lists the program's known people with a checkbox per session, plus a
+line for walk-ins by name. Transcribing is ticking boxes, which keeps spelling variants
+out of the match queue, and there is no spreadsheet to export, parse or sign: the rows
+are written straight into the system with `created_by` and one audit entry for the
+sitting. Spreadsheet (Excel) upload of the sheet is deferred; it can be added later
+behind the same preview-and-confirm flow as a Teams export if transcribing proves slow.
 
 **A public cross-institution directory is a separate read-only site, deferred.**
 It must span institutions, which are in separate databases, so it cannot live inside an
