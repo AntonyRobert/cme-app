@@ -227,7 +227,7 @@ def test_a_program_admin_edits_their_own_program_only(client, two_programs):
             "attendance_rate_per_hour": "1.00", "teaching_rate_per_hour": "1.50",
             "default_accredited_credits": "3.00", "attendance_disagreement_minutes": "3",
             "accreditation_year_end_month": "12", "accreditation_year_end_day": "31",
-            "coi_question_version": "2026-10", "retention_years": "7",
+            "coi_question_version": "2026-10", "retention_years": "7", "activity_evaluation_cadence": "per_event",
             "roles-TOTAL_FORMS": 0, "roles-INITIAL_FORMS": 0,
         },
     )
@@ -241,7 +241,7 @@ def test_a_program_admin_edits_their_own_program_only(client, two_programs):
          "teaching_rate_per_hour": "9", "default_accredited_credits": "3.00",
          "attendance_disagreement_minutes": "5", "accreditation_year_end_month": "12",
          "accreditation_year_end_day": "31", "coi_question_version": "2026-10",
-         "retention_years": "7", "roles-TOTAL_FORMS": 0, "roles-INITIAL_FORMS": 0},
+         "retention_years": "7", "activity_evaluation_cadence": "per_event", "roles-TOTAL_FORMS": 0, "roles-INITIAL_FORMS": 0},
     )
     assert refused.status_code == 403
     im.refresh_from_db()
