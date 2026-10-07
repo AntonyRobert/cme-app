@@ -94,7 +94,8 @@ def test_the_caddy_site_template_has_no_bare_lines_caddy_would_read_as_directive
     template = (ROOT / "deploy" / "site.caddy.template").read_text(encoding="utf-8")
     rendered = template.replace("__ORG__", "mcgill").replace("__HOSTNAME__", "cme.mri3.ca")
     directives = {"encode", "handle_path", "root", "header", "file_server", "handle", "reverse_proxy",
-                  "header_up", "log", "output", "roll_size", "roll_keep"}
+                  "header_up", "log", "output"}
+    assert "output file" not in rendered and "/var/log" not in rendered  # the journal, never a file Caddy cannot write
     first_code = next(l for l in rendered.splitlines() if l.strip() and not l.lstrip().startswith("#"))
     assert first_code == "cme.mri3.ca {"  # the site block opens with the hostname, nothing before it
     for line in rendered.splitlines():

@@ -222,6 +222,12 @@ listed). Nothing pushed.
   tenant group, can reach it. The tmpfiles rule is gone and the script removes a stale
   one. Per-instance directories also mean one tenant stopping cannot remove another's
   socket, which a shared `RuntimeDirectory=cme` would have done.
+- **Caddy access log to the journal, not a file.** The template's `output file
+  /var/log/caddy/...` failed under the packaged unit's `ProtectSystem`; a hand edit on
+  the box was overwritten by the next `server-setup.sh` run, as hand edits are. The
+  template now logs to stderr (`journalctl -u caddy`) and a test refuses `output file`.
+  Line 1 of the template was checked again (`cat -A`, on disk and on `origin/main`): it
+  has always started with `#`.
 - **Two OS users per tenant**, not one: `cme_<org>_owner` (migrate, owns the checkout)
   and `cme_<org>` (gunicorn, owns uploads). Peer auth maps each to its role, so the only
   way to run DDL is to be the owner user, and the serving process never is.

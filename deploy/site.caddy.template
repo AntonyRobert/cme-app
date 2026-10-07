@@ -22,10 +22,10 @@ __HOSTNAME__ {
 	# Django sets HSTS, nosniff, referrer policy and frame options itself.
 	header -Server
 
+	# Access log to stderr, which the packaged caddy.service sends to the journal
+	# (journalctl -u caddy). No log file: Caddy's unit runs under ProtectSystem
+	# and a file under /var/log is not its to write.
 	log {
-		output file /var/log/caddy/__ORG__.access.log {
-			roll_size 50mb
-			roll_keep 10
-		}
+		output stderr
 	}
 }
