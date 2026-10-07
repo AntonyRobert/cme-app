@@ -494,10 +494,10 @@ function:
 evaluation_gate(person, session)       -> bool     # a complete evaluation of THAT session
 creditable_time(person, event)         -> per session: minutes, source, attended,
                                           evaluated, review reasons
-round_credits(hours)                   -> Decimal  # round DOWN to the nearest 0.25
-computed_credits(person, event)        = min(round_credits(sum over sessions of
+credits_for_minutes(minutes)           -> Decimal  # minutes / 60, to the hundredth
+computed_credits(person, event)        = min(credits_for_minutes(sum over sessions of
                                                 minutes attended, counted only if that
-                                                session passes the gate) / 60,
+                                                session passes the gate),
                                              event.accredited_credits)
 event_credits(person, event)           = max(computed_credits + sum(adjustment deltas), 0)
 ```
@@ -509,9 +509,10 @@ once that talk's form is filled in. There is no minimum and no rounding up; 59 m
 a 60-minute session is 59 minutes. The only softening is the grace at the ends of the
 event, which is real time that was spent connected.
 
-Rounding happens **once, on the event total**, so a certificate's total is exactly the sum
-of its printed lines and three 20-minute sessions attended in full are one credit rather
-than three quarters.
+**Credit is hours attended, not a quarter-step figure.** 59 minutes of a 60-minute talk
+is 59/60 of a credit, 0.98. The only rounding is to two decimal places, downward, applied
+once to the event's total minutes so a certificate's total is exactly the sum of its
+printed lines.
 
 `accredited_credits` stays a field rather than being computed from the sessions, so an
 accrediting body can approve fewer credits than the clock says.

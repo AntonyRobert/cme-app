@@ -4,7 +4,6 @@ from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
 
-from core.constraints import is_quarter_multiple, validate_quarter_multiple
 from core.models import AppendOnlyMixin, FrozenFieldsMixin, UUIDModel
 from people.models import Person
 from people.ownership import PersonOwnedQuerySet
@@ -171,8 +170,7 @@ class CreditAdjustment(AppendOnlyMixin, UUIDModel):
     delta_credits = models.DecimalField(
         max_digits=5,
         decimal_places=2,
-        validators=[validate_quarter_multiple],
-        help_text="Added to the computed credit. Negative to take away. Steps of 0.25.",
+        help_text="Added to the computed credit. Negative to take away.",
     )
     reason = models.TextField()
     created_by = models.ForeignKey(
@@ -190,10 +188,6 @@ class CreditAdjustment(AppendOnlyMixin, UUIDModel):
             ),
             models.CheckConstraint(
                 condition=~Q(delta_credits=0), name="creditadjustment_not_zero"
-            ),
-            models.CheckConstraint(
-                condition=is_quarter_multiple("delta_credits"),
-                name="creditadjustment_quarter_multiple",
             ),
         ]
 

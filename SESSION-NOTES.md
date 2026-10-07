@@ -37,10 +37,11 @@ Everything in your review is built. In order:
 - **B. Credit per session, gated per session.** `credits/rules.py` is rewritten.
   Qualifying minutes per session count only when that session has a complete evaluation;
   the event total is their sum, capped at `accredited_credits`, which stays a field.
-- **C. Minutes as recorded.** Your "five minutes" meant that five minutes of a talk
-  counts, for five minutes, once the form is filled in. There is no tolerance rounding 59
-  up to 60; I had built one and removed it. Tests: five of sixty is five minutes; 60 + 5
-  across two talks is 65, rounded once to 1.00; 59 of 60 is 59, which is 0.75.
+- **C. Credit is hours attended.** Your "five minutes" meant that five minutes of a
+  talk counts, for five minutes, once the form is filled in; and then you dropped the
+  quarter rounding altogether. Credit is now minutes / 60 to the hundredth: five of sixty
+  is 0.08, 59 of 60 is 0.98, 65 minutes across two talks is 1.08. The quarter-step rule
+  stays only on `accredited_credits`; adjustments can be any hundredth.
 - **D. Evaluation windows.** `EvaluationWindow` and `credits/windows.py`: a week from the
   event date, self-service reopenings of a week each, auto-granted and audit-logged, three
   per person per session, none past the accreditation year; program-admin override,
@@ -65,22 +66,16 @@ Tests you asked for, by name: `test_a_break_between_sessions_does_not_count`,
 
 ### Decisions in the redesign that your review did not settle
 
-1. **Rounding happens once, on the event total, not per session.** You wrote "per
-   session ... round down to the quarter as before". Rounding each session separately
-   would turn three 20-minute talks attended in full into 3 x 0.25 = 0.75 rather than
-   1.00, and would break "total equals the sum of the lines" the moment sessions are not
-   multiples of 15 minutes. Minutes are gathered per session, then rounded once per
-   event. Your two examples (59 of 60 is 1.00, 52 is 0.75) hold either way; a test pins
-   the three-short-sessions case. Say so if you want per-session rounding regardless.
+1. **The hundredths are cut once, on the event total.** Minutes are gathered per
+   session and divided by sixty once, so a certificate's total equals the sum of its
+   lines. Cut downward, so a printed figure never overstates.
 2. **Hours-only manual rows now name a session** (`AttendanceRecord.session`, with a
    check constraint). Minutes without times had to belong somewhere to be credited per
    session. Timed rows leave it blank and are matched by their times. The migration
    assigned any existing hours-only row to its event's first session.
 3. **Grace at the ends only.** Five minutes before the first session and after the last
-   are real connected time and count; a break between talks does not. With no tolerance,
-   someone who joins the first talk a minute late and leaves on time has 59 minutes,
-   which rounds down to 0.75. That is the cliff from my earlier notes, back as a
-   consequence of "minutes as recorded"; it is yours to accept or not.
+   are real connected time and count; a break between talks does not. With credit as
+   hours attended there is no cliff any more: a minute late is a hundredth of a credit.
 4. **Partial attendance still earns partial credit if evaluated.** The 50% rule decides
    who is *asked* to evaluate and what the certificate lists, not who may. Someone who
    caught the last 20 minutes of a talk and evaluates it anyway earns 20 minutes.
@@ -189,8 +184,7 @@ permissions by hand in the admin will not stick.**
 - **The event page says why someone is flagged**: claims more than was recorded,
   self-reported only, or rows adding up to more than a session lasted.
 - **Attended minutes round down to whole minutes** before the credit calculation.
-- **Credit adjustments go in steps of 0.25 and cannot be zero**, so a certificate total
-  stays a multiple of a quarter.
+- **Credit adjustments cannot be zero** and can be any hundredth of a credit.
 - **A mistaken row is voided by superseding it with a zero-minute manual row.** Nothing is
   ever deleted, including manual rows.
 - **The replacement in a supersession must be a live row and in the same event.** That is

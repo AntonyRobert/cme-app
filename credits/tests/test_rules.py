@@ -15,8 +15,8 @@ from credits.rules import (
     computed_credits,
     credit_breakdown,
     evaluation_gate,
+    credits_for_minutes,
     event_credits,
-    round_credits,
 )
 from people.models import Person
 from people.tests.factories import make_person
@@ -54,38 +54,39 @@ def standing(person, event):
     return b.credited_minutes, b.computed_credits, b.credits
 
 
-# --- Rounding ----------------------------------------------------------------
+# --- Credit is hours attended ------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "hours, expected",
+    "minutes, expected",
     [
-        ("0", "0.00"),
-        ("0.24", "0.00"),
-        ("0.25", "0.25"),
-        ("0.49", "0.25"),
-        ("0.50", "0.50"),
-        ("0.99", "0.75"),
-        ("1", "1.00"),
-        ("1.24", "1.00"),
-        ("1.26", "1.25"),
-        ("2.75", "2.75"),
-        ("-1", "0.00"),
+        (0, "0.00"),
+        (1, "0.01"),
+        (5, "0.08"),
+        (14, "0.23"),
+        (15, "0.25"),
+        (30, "0.50"),
+        (45, "0.75"),
+        (59, "0.98"),
+        (60, "1.00"),
+        (65, "1.08"),
+        (90, "1.50"),
+        (180, "3.00"),
+        (-1, "0.00"),
     ],
 )
-def test_round_credits_rounds_down_to_the_quarter(hours, expected):
-    result = round_credits(D(hours))
+def test_credits_for_minutes_is_minutes_over_sixty(minutes, expected):
+    result = credits_for_minutes(minutes)
     assert result == D(expected)
     assert isinstance(result, Decimal)
     assert result.as_tuple().exponent == -2
 
 
-def test_round_credits_never_rounds_up():
+def test_the_hundredths_are_cut_never_rounded_up():
     for minutes in range(0, 181):
-        rounded = round_credits(D(minutes) / 60)
-        assert rounded <= D(minutes) / 60
-        assert rounded % D("0.25") == 0
-        assert D(minutes) / 60 - rounded < D("0.25")
+        credits = credits_for_minutes(minutes)
+        assert credits <= D(minutes) / 60
+        assert D(minutes) / 60 - credits < D("0.01")
 
 
 # --- Minutes count as recorded, however few, once the form is filled in -----
@@ -95,24 +96,23 @@ def test_five_minutes_of_a_session_count_for_five_minutes_once_evaluated(event, 
     teams_row(event, person, 0, 5)
     assert standing(person, event) == (0, D("0.00"), D("0.00"))  # not evaluated yet
     evaluate(person, sessions(event)[0])
-    assert standing(person, event) == (5, D("0.00"), D("0.00"))  # five minutes, under a quarter
+    assert standing(person, event) == (5, D("0.08"), D("0.08"))  # 5/60 of a credit
 
 
 def test_a_few_minutes_of_one_talk_add_to_a_whole_other_talk(event, person):
-    """60 + 5 = 65 minutes, rounded once per event: 1.00."""
+    """60 + 5 = 65 minutes: 1.08 credits."""
     teams_row(event, person, 0, 60)
     teams_row(event, person, 60, 65)
     for session in sessions(event)[:2]:
         evaluate(person, session)
-    assert standing(person, event) == (65, D("1.00"), D("1.00"))
+    assert standing(person, event) == (65, D("1.08"), D("1.08"))
 
 
-def test_59_minutes_of_a_60_minute_session_is_59_minutes(person):
-    """No rounding up: joining a minute late is 59 minutes, which rounds down to 0.75."""
+def test_59_minutes_of_a_60_minute_session_is_59_sixtieths_of_a_credit(person):
     event = make_event(minutes=60, credits="1.00")
     teams_row(event, person, 1, 60)
     evaluate(person, sessions(event)[0])
-    assert standing(person, event) == (59, D("0.75"), D("0.75"))
+    assert standing(person, event) == (59, D("0.98"), D("0.98"))
 
 
 def test_joining_early_makes_up_for_leaving_early(person):
@@ -195,11 +195,10 @@ def test_part_of_a_session_earns_part_credit_once_evaluated(event, person):
     assert standing(person, event) == (30, D("0.50"), D("0.50"))
 
 
-# --- Rounding is per event ---------------------------------------------------
+# --- Credit follows the minutes ---------------------------------------------
 
 
-def test_short_sessions_are_rounded_together_not_one_by_one(person):
-    """Three 20-minute sessions attended in full are 1.00, not three times 0.25."""
+def test_three_20_minute_sessions_make_one_credit(person):
     event = make_event(minutes=60, credits="1.00", sessions=0)
     for _ in range(3):
         make_session(event, minutes=20)
@@ -211,9 +210,9 @@ def test_short_sessions_are_rounded_together_not_one_by_one(person):
 
 @pytest.mark.parametrize(
     "attended, expected",
-    [(60, "1.00"), (59, "0.75"), (45, "0.75"), (44, "0.50"), (15, "0.25"), (14, "0.00"), (5, "0.00")],
+    [(60, "1.00"), (59, "0.98"), (45, "0.75"), (44, "0.73"), (15, "0.25"), (14, "0.23"), (5, "0.08")],
 )
-def test_credit_follows_attended_minutes_rounded_down(person, attended, expected):
+def test_credit_follows_attended_minutes(person, attended, expected):
     event = make_event(minutes=60, credits="1.00")
     if attended:
         teams_row(event, person, 0, attended)
@@ -244,7 +243,7 @@ def test_a_correction_changes_the_credit(person):
     event = make_event(minutes=60, credits="1.00")
     wrong = teams_row(event, person, 0, 20)
     evaluate(person, sessions(event)[0])
-    assert event_credits(person, event) == D("0.25")
+    assert event_credits(person, event) == D("0.33")
     supersede([wrong], manual_row(event, person, minutes=60, reason="Teams lost the rejoin"))
     assert event_credits(person, event) == D("1.00")
 
@@ -276,7 +275,7 @@ def test_credit_follows_a_merge(event):
     teams_row(event, duplicate, 0, 60)
     evaluate(survivor, sessions(event)[0], minutes=20)
     # Before the merge only the self-report is theirs: 20 minutes.
-    assert event_credits(survivor, event) == D("0.25")
+    assert event_credits(survivor, event) == D("0.33")
     Person.objects.filter(pk=duplicate.pk).update(merged_into=survivor)
     assert event_credits(survivor, event) == D("1.00")
 
@@ -423,13 +422,12 @@ def test_credit_never_goes_below_zero(event, person):
     assert event_credits(person, event) == D("0.00")
 
 
-def test_an_adjustment_needs_a_reason_and_a_quarter_step_amount(event, person):
+def test_an_adjustment_needs_a_reason_and_cannot_be_zero(event, person):
     with pytest.raises(IntegrityError), transaction.atomic():
         adjust(person, event, "0.25", reason="")
     with pytest.raises(IntegrityError), transaction.atomic():
-        adjust(person, event, "0.10")
-    with pytest.raises(IntegrityError), transaction.atomic():
         adjust(person, event, "0")
+    adjust(person, event, "0.02", reason="Top up to the hour; chair approved")
 
 
 def test_adjustments_cannot_be_edited_or_deleted(event, person):

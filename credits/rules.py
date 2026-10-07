@@ -11,7 +11,6 @@ from decimal import ROUND_FLOOR, Decimal
 from django.db.models import Sum
 
 from attendance.aggregation import MinutesSource, attended_minutes
-from core.constraints import QUARTER
 
 from .models import CreditAdjustment, EvaluationSubmission
 
@@ -25,18 +24,17 @@ REVIEW_SELF_REPORTED_ONLY = "self-reported only"
 REVIEW_OVER_SESSION_LENGTH = "rows add up to more than a session lasted (duplicate manual row?)"
 
 
-def round_credits(hours):
+def credits_for_minutes(minutes):
     """
-    Round DOWN to the nearest quarter credit.
+    Credit is hours attended: minutes / 60, to the hundredth.
 
-    Down, because overstating credit is the error that can't be recovered
-    from. Called once per event, on the minutes of the sessions that are
-    unlocked, so a certificate's total is exactly the sum of its lines.
+    59 minutes of a 60-minute talk is 59/60 of a credit, 0.98. No rounding
+    to a quarter. The only rounding is to two decimal places, and that is
+    downward, so a printed figure never overstates.
     """
-    hours = Decimal(hours)
-    if hours <= 0:
+    if minutes <= 0:
         return ZERO
-    return ((hours / QUARTER).to_integral_value(rounding=ROUND_FLOOR) * QUARTER).quantize(ZERO)
+    return (Decimal(minutes) / 60).quantize(ZERO, rounding=ROUND_FLOOR)
 
 
 def evaluation_gate(person, session):
@@ -199,16 +197,16 @@ def credit_breakdown(person, event):
 
         per session: the minutes attended, counted only if that session has
                      a complete evaluation
-        computed   = min(round_credits(sum of counted minutes / 60),
+        computed   = min(credits_for_minutes(sum of counted minutes),
                          event.accredited_credits)
         credits    = max(computed + adjustments, 0)
 
-    Rounding happens once, on the event total, so three 20-minute sessions
-    attended in full are 1.00 credit, not three times 0.25.
+    Minutes are summed across the event first, so the hundredths are cut
+    once, not once per session.
     """
     sessions, source = creditable_time(person, event)
     credited = sum(s.credited_minutes for s in sessions)
-    computed = min(round_credits(Decimal(credited) / 60), event.accredited_credits).quantize(ZERO)
+    computed = min(credits_for_minutes(credited), event.accredited_credits).quantize(ZERO)
     return CreditBreakdown(
         sessions=sessions,
         source=source,

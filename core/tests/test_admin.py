@@ -337,7 +337,7 @@ def test_a_credit_adjustment_records_who_and_why_and_is_then_frozen(client, boss
     assert str(adjustment.delta_credits) == "0.50"
     bad = client.post(
         url(CreditAdjustment, "add"),
-        {"person": roy.pk, "event": first.pk, "delta_credits": "0.10", "reason": "odd amount"},
+        {"person": roy.pk, "event": first.pk, "delta_credits": "0", "reason": "does nothing"},
     )
     assert bad.status_code == 200 and bad.context["adminform"].form.errors
 

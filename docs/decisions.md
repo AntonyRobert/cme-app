@@ -65,19 +65,18 @@ stricter candidate from the earlier open question is now buildable, because sess
 times, and this is it. `accredited_credits` stays a field so an accrediting body can
 approve fewer credits than the clock says.
 
-**Credit is rounded down to the nearest quarter, once per event.**
-Down, because overstating credit is the error that can't be recovered from. Once per
-event, because a certificate prints lines and a total, and a total that doesn't equal the
-sum of its lines makes an accreditor distrust the whole document; and because rounding
-each session separately would turn three full 20-minute talks into three quarters of a
-credit.
+**Credit is hours attended: minutes divided by sixty, no quarter rounding.**
+59 minutes of a 60-minute talk is 59/60 of a credit, 0.98. Rounding to the nearest
+quarter was decided early and reversed: it produced a cliff where joining a minute late
+cost a quarter credit, and a five-minute tolerance to soften it was tried and rejected
+too. The minutes are what the record says, and the credit follows them. The only rounding
+is to two decimal places, downward, applied once to the event's total minutes so a
+certificate's total equals the sum of its lines. `accredited_credits` keeps its
+quarter-step rule, because that is how accrediting bodies state what they approve; credit
+adjustments can be any hundredth.
 
 **Minutes count exactly as recorded, however few, once the session is evaluated.**
-Five minutes of a talk is five minutes of credit-bearing time, not nothing; 59 minutes is
-59, not 60. There is no minimum and no tolerance that rounds a session up. Partial minutes
-from several talks add together before the single round-down per event. A five-minute
-tolerance was briefly considered to soften the quarter-credit cliff and rejected: the
-minutes are what the record says.
+Five minutes of a talk is 5/60 of a credit, not nothing. There is no minimum.
 
 **Grace is five minutes at each end of the event, not around each session.**
 Joining early for the first talk and lingering after the last are ordinary; wandering in
