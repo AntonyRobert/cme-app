@@ -16,7 +16,6 @@ from credits.rules import (
     credit_breakdown,
     evaluation_gate,
     event_credits,
-    qualifying_minutes,
     round_credits,
 )
 from people.models import Person
@@ -89,42 +88,42 @@ def test_round_credits_never_rounds_up():
         assert D(minutes) / 60 - rounded < D("0.25")
 
 
-# --- The five-minute tolerance (no cliff for joining a minute late) ----------
+# --- Minutes count as recorded, however few, once the form is filled in -----
 
 
-@pytest.mark.parametrize(
-    "minutes, expected",
-    [(60, 60), (59, 60), (55, 60), (54, 54), (52, 52), (30, 30), (0, 0)],
-)
-def test_qualifying_minutes_within_five_of_the_session_is_the_whole_session(minutes, expected):
-    assert qualifying_minutes(minutes, 60) == expected
+def test_five_minutes_of_a_session_count_for_five_minutes_once_evaluated(event, person):
+    teams_row(event, person, 0, 5)
+    assert standing(person, event) == (0, D("0.00"), D("0.00"))  # not evaluated yet
+    evaluate(person, sessions(event)[0])
+    assert standing(person, event) == (5, D("0.00"), D("0.00"))  # five minutes, under a quarter
 
 
-def test_59_minutes_of_a_60_minute_session_is_a_full_credit(person):
+def test_a_few_minutes_of_one_talk_add_to_a_whole_other_talk(event, person):
+    """60 + 5 = 65 minutes, rounded once per event: 1.00."""
+    teams_row(event, person, 0, 60)
+    teams_row(event, person, 60, 65)
+    for session in sessions(event)[:2]:
+        evaluate(person, session)
+    assert standing(person, event) == (65, D("1.00"), D("1.00"))
+
+
+def test_59_minutes_of_a_60_minute_session_is_59_minutes(person):
+    """No rounding up: joining a minute late is 59 minutes, which rounds down to 0.75."""
     event = make_event(minutes=60, credits="1.00")
-    teams_row(event, person, 1, 60)  # joined a minute late
+    teams_row(event, person, 1, 60)
+    evaluate(person, sessions(event)[0])
+    assert standing(person, event) == (59, D("0.75"), D("0.75"))
+
+
+def test_joining_early_makes_up_for_leaving_early(person):
+    """The grace before the start is real minutes: 11:55 to 12:55 is the hour."""
+    event = make_event(minutes=60, credits="1.00")
+    teams_row(event, person, -5, 55)
     evaluate(person, sessions(event)[0])
     assert standing(person, event) == (60, D("1.00"), D("1.00"))
 
 
-def test_52_minutes_of_a_60_minute_session_is_three_quarters(person):
-    event = make_event(minutes=60, credits="1.00")
-    teams_row(event, person, 8, 60)
-    evaluate(person, sessions(event)[0])
-    assert standing(person, event) == (52, D("0.75"), D("0.75"))
-
-
-def test_the_tolerance_is_per_session_not_per_event(event, person):
-    """Three sessions, each missed by four minutes: each still counts in full."""
-    teams_row(event, person, 4, 60)
-    teams_row(event, person, 64, 120)
-    teams_row(event, person, 124, 180)
-    for session in sessions(event):
-        evaluate(person, session)
-    assert standing(person, event) == (180, D("3.00"), D("3.00"))
-
-
-def test_the_tolerance_does_not_stack_with_the_cap(person):
+def test_grace_does_not_exceed_the_session(person):
     event = make_event(minutes=60, credits="1.00")
     teams_row(event, person, -5, 65)
     evaluate(person, sessions(event)[0])
@@ -212,9 +211,9 @@ def test_short_sessions_are_rounded_together_not_one_by_one(person):
 
 @pytest.mark.parametrize(
     "attended, expected",
-    [(60, "1.00"), (55, "1.00"), (54, "0.75"), (45, "0.75"), (44, "0.50"), (15, "0.25"), (14, "0.00")],
+    [(60, "1.00"), (59, "0.75"), (45, "0.75"), (44, "0.50"), (15, "0.25"), (14, "0.00"), (5, "0.00")],
 )
-def test_credit_follows_qualifying_minutes_rounded_down(person, attended, expected):
+def test_credit_follows_attended_minutes_rounded_down(person, attended, expected):
     event = make_event(minutes=60, credits="1.00")
     if attended:
         teams_row(event, person, 0, attended)

@@ -492,13 +492,11 @@ function:
 
 ```
 evaluation_gate(person, session)       -> bool     # a complete evaluation of THAT session
-qualifying_minutes(minutes, length)    -> int      # within 5 minutes of the whole session
-                                                   # counts as the whole session
 creditable_time(person, event)         -> per session: minutes, source, attended,
                                           evaluated, review reasons
 round_credits(hours)                   -> Decimal  # round DOWN to the nearest 0.25
 computed_credits(person, event)        = min(round_credits(sum over sessions of
-                                                qualifying minutes, counted only if that
+                                                minutes attended, counted only if that
                                                 session passes the gate) / 60,
                                              event.accredited_credits)
 event_credits(person, event)           = max(computed_credits + sum(adjustment deltas), 0)
@@ -506,9 +504,10 @@ event_credits(person, event)           = max(computed_credits + sum(adjustment d
 
 The gate is per session so that evaluating one talk cannot claim credit for three.
 
-The five-minute tolerance exists because round-down alone has a cliff: without it, joining
-sixty seconds late costs a quarter credit. It is symmetric with the grace before the first
-session. 59 minutes of a 60-minute session is a full hour; 52 minutes is 52.
+Minutes count exactly as recorded, however few: five minutes of a talk is five minutes,
+once that talk's form is filled in. There is no minimum and no rounding up; 59 minutes of
+a 60-minute session is 59 minutes. The only softening is the grace at the ends of the
+event, which is real time that was spent connected.
 
 Rounding happens **once, on the event total**, so a certificate's total is exactly the sum
 of its printed lines and three 20-minute sessions attended in full are one credit rather

@@ -72,11 +72,12 @@ sum of its lines makes an accreditor distrust the whole document; and because ro
 each session separately would turn three full 20-minute talks into three quarters of a
 credit.
 
-**Within five minutes of a whole session counts as the whole session.**
-Round-down alone has a cliff: joining sixty seconds late cost a quarter credit, which is
-not defensible. The asymmetry was the bug (grace before the start, none at the end). The
-tolerance is symmetric with the grace, applied per session, before rounding. The cap at
-the session's real length stays. 59 minutes of 60 is 1.00; 52 is 0.75.
+**Minutes count exactly as recorded, however few, once the session is evaluated.**
+Five minutes of a talk is five minutes of credit-bearing time, not nothing; 59 minutes is
+59, not 60. There is no minimum and no tolerance that rounds a session up. Partial minutes
+from several talks add together before the single round-down per event. A five-minute
+tolerance was briefly considered to soften the quarter-credit cliff and rejected: the
+minutes are what the record says.
 
 **Grace is five minutes at each end of the event, not around each session.**
 Joining early for the first talk and lingering after the last are ordinary; wandering in

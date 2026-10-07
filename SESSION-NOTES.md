@@ -37,8 +37,10 @@ Everything in your review is built. In order:
 - **B. Credit per session, gated per session.** `credits/rules.py` is rewritten.
   Qualifying minutes per session count only when that session has a complete evaluation;
   the event total is their sum, capped at `accredited_credits`, which stays a field.
-- **C. The cliff.** `qualifying_minutes()`: within five minutes of a whole session is the
-  whole session, before rounding. 59 of 60 gives 1.00; 52 gives 0.75. Both are tests.
+- **C. Minutes as recorded.** Your "five minutes" meant that five minutes of a talk
+  counts, for five minutes, once the form is filled in. There is no tolerance rounding 59
+  up to 60; I had built one and removed it. Tests: five of sixty is five minutes; 60 + 5
+  across two talks is 65, rounded once to 1.00; 59 of 60 is 59, which is 0.75.
 - **D. Evaluation windows.** `EvaluationWindow` and `credits/windows.py`: a week from the
   event date, self-service reopenings of a week each, auto-granted and audit-logged, three
   per person per session, none past the accreditation year; program-admin override,
@@ -74,10 +76,11 @@ Tests you asked for, by name: `test_a_break_between_sessions_does_not_count`,
    check constraint). Minutes without times had to belong somewhere to be credited per
    session. Timed rows leave it blank and are matched by their times. The migration
    assigned any existing hours-only row to its event's first session.
-3. **Grace at the ends only, not the tolerance.** Grace (five minutes before the first
-   session, after the last) is about when time starts counting. The tolerance (within
-   five minutes of a whole session counts as whole) is per session, including the middle
-   ones. Someone who arrives four minutes late to every talk gets every talk in full.
+3. **Grace at the ends only.** Five minutes before the first session and after the last
+   are real connected time and count; a break between talks does not. With no tolerance,
+   someone who joins the first talk a minute late and leaves on time has 59 minutes,
+   which rounds down to 0.75. That is the cliff from my earlier notes, back as a
+   consequence of "minutes as recorded"; it is yours to accept or not.
 4. **Partial attendance still earns partial credit if evaluated.** The 50% rule decides
    who is *asked* to evaluate and what the certificate lists, not who may. Someone who
    caught the last 20 minutes of a talk and evaluates it anyway earns 20 minutes.
@@ -101,8 +104,8 @@ Tests you asked for, by name: `test_a_break_between_sessions_does_not_count`,
     recorded, not coded.
 12. **The seed events are now noon to three with three one-hour sessions**, since that
     is the typical event. Every expected figure in the seed tests was recomputed by hand
-    for the awkward cases (Côté's 54 minutes, one short of the tolerance; Nguyen's lobby
-    time; the room roster copy) and by the code for the rest.
+    for the awkward cases (Côté's 54 minutes; Nguyen's lobby time; the room roster copy)
+    and by the code for the rest.
 
 ### Things I would still raise
 
@@ -314,7 +317,7 @@ Sign in and try these:
   an unknown address. Pick Léa Bouchard on one and save: the other two follow.
 - **Rounds events → open either event**: the per-person credit table at the bottom, now
   with sessions attended and evaluated out of three. Rejoins (Côté: 54 minutes of the
-  first talk, one short of the tolerance, 0.75), laptop and phone at once (Haddad, two
+  first talk, 0.75), laptop and phone at once (Haddad, two
   talks evaluated, 2.00), lobby time clamped (Nguyen), a room roster (Lavoie, Roy),
   superseded rows (Sharma), an adjustment (Okafor), a self-report-only case (Morin), and
   on the second event a talk that ran over (Gagnon, 65 minutes).

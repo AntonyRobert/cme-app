@@ -17,11 +17,6 @@ from .models import CreditAdjustment, EvaluationSubmission
 
 ZERO = Decimal("0.00")
 
-# Attending all but this much of a session counts as the whole session.
-# Symmetric with the grace before the first session: joining a minute late
-# is not worth a quarter credit.
-FULL_SESSION_TOLERANCE_MINUTES = 5
-
 # A self-report this much higher than the recorded minutes gets a human look.
 REVIEW_THRESHOLD_MINUTES = 15
 
@@ -42,17 +37,6 @@ def round_credits(hours):
     if hours <= 0:
         return ZERO
     return ((hours / QUARTER).to_integral_value(rounding=ROUND_FLOOR) * QUARTER).quantize(ZERO)
-
-
-def qualifying_minutes(minutes, session_length_minutes):
-    """
-    The minutes a session is credited for: within
-    FULL_SESSION_TOLERANCE_MINUTES of the whole session counts as the whole
-    session. 59 of 60 is 60; 52 of 60 is 52.
-    """
-    if minutes >= session_length_minutes - FULL_SESSION_TOLERANCE_MINUTES:
-        return session_length_minutes
-    return minutes
 
 
 def evaluation_gate(person, session):
@@ -80,13 +64,13 @@ class SessionCredit:
     review_reasons: tuple = ()
 
     @property
-    def qualifying_minutes(self):
-        return qualifying_minutes(self.minutes, self.session.length_minutes)
-
-    @property
     def credited_minutes(self):
-        """What counts toward the event's credit: nothing until evaluated."""
-        return self.qualifying_minutes if self.evaluated else 0
+        """
+        What counts toward the event's credit: the minutes as recorded, however
+        few (five minutes of a talk is five minutes), and nothing until the
+        session is evaluated.
+        """
+        return self.minutes if self.evaluated else 0
 
 
 @dataclass(frozen=True)
@@ -213,8 +197,8 @@ def credit_breakdown(person, event):
     """
     The credit calculation:
 
-        per session: qualifying minutes, counted only if that session has a
-                     complete evaluation
+        per session: the minutes attended, counted only if that session has
+                     a complete evaluation
         computed   = min(round_credits(sum of counted minutes / 60),
                          event.accredited_credits)
         credits    = max(computed + adjustments, 0)

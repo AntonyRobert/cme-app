@@ -67,7 +67,7 @@ def test_seed_refuses_a_database_that_already_has_data(seeded):
     [
         # one connection, every session evaluated
         ("Tremblay", ([60, 60, 60], MinutesSource.TEAMS, 180, D("3.00"), False)),
-        # three rejoins; session 1 is 54 minutes, one short of counting in full
+        # three rejoins; only session 1 (54 minutes) is evaluated
         ("Côté", ([54, 60, 57], MinutesSource.TEAMS, 54, D("0.75"), False)),
         # laptop and phone at once, counted once; two sessions evaluated
         ("Haddad", ([60, 60, 60], MinutesSource.TEAMS, 120, D("2.00"), False)),
@@ -75,8 +75,8 @@ def test_seed_refuses_a_database_that_already_has_data(seeded):
         ("Nguyen", ([60, 33, 0], MinutesSource.TEAMS, 60, D("1.00"), False)),
         # joined a quarter past; only an incomplete evaluation; an adjustment
         ("Okafor", ([45, 60, 60], MinutesSource.TEAMS, 0, D("0.75"), False)),
-        # room roster: the device's 12:03-14:57, 57 minutes counting as the hour
-        ("Lavoie", ([57, 60, 57], MinutesSource.MANUAL, 60, D("1.00"), False)),
+        # room roster: the device's 12:03-14:57; 57 minutes of the first talk
+        ("Lavoie", ([57, 60, 57], MinutesSource.MANUAL, 57, D("0.75"), False)),
         # arrived 13:15, no evaluation
         ("Roy", ([0, 45, 57], MinutesSource.MANUAL, 0, D("0.00"), False)),
         # superseded laptop rows; a 55-minute manual row for the talk she gave
