@@ -3,6 +3,12 @@ from pathlib import Path
 
 from django import forms
 from django.contrib import admin, messages
+from django.core.exceptions import PermissionDenied
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.http import Http404
+from django.shortcuts import redirect
+from django.template.response import TemplateResponse
+from django.urls import path, reverse
 from django.utils import timezone
 from django.utils.html import format_html, format_html_join
 
@@ -14,7 +20,7 @@ from core.admin import (
     admin_link,
 )
 
-from . import teams
+from . import preview as pending, teams
 from .models import AttendanceRecord, AttendanceSupersession, AttendanceUpload
 from .services import (
     ALLOWED_UPLOAD_EXTENSIONS,
@@ -129,23 +135,90 @@ class AttendanceUploadAdmin(ProgramScopedAdminMixin, NoDeleteMixin, BaseAdmin):
     def get_readonly_fields(self, request, obj=None):
         return [] if obj is None else self.get_fields(request, obj)
 
+    # --- Preview before anything is stored ---
+
+    def get_urls(self):
+        return [
+            path(
+                "preview/<str:sha>/",
+                self.admin_site.admin_view(self.preview_view),
+                name="attendance_attendanceupload_preview",
+            ),
+            *super().get_urls(),
+        ]
+
     def save_model(self, request, obj, form, change):
         if change:
             return
-        stored, export = upload_teams_export(
-            form.cleaned_data["file"], event=obj.event, user=request.user, request=request
-        )
-        # The admin goes on to use `obj` for its redirect and message.
-        obj.__dict__.update(stored.__dict__)
-        unmatched = stored.records.filter(person__isnull=True).count()
-        self.message_user(
-            request,
-            f"Read {stored.row_count} rows for {stored.event}. {unmatched} could not be matched "
-            "by email and wait in the review queue (Attendance records, filter Unmatched).",
-            messages.SUCCESS,
-        )
-        for warning in export.warnings:
-            self.message_user(request, f"Check: {warning}", messages.WARNING)
+        # Not stored yet: the file waits in the pending area until the
+        # reviewer has seen what it will do.
+        uploaded = form.cleaned_data["file"]
+        raw = b"".join(uploaded.chunks())
+        sha = pending.stash(raw, uploaded.name, event_id=obj.event.pk, user_id=request.user.pk)
+        obj._pending_sha = sha
+
+    def response_add(self, request, obj, post_url_continue=None):
+        sha = getattr(obj, "_pending_sha", None)
+        if sha:
+            return redirect("admin:attendance_attendanceupload_preview", sha=sha)
+        return super().response_add(request, obj, post_url_continue)
+
+    def log_addition(self, request, obj, message):
+        # Nothing was added yet; the import is logged by the services on confirm.
+        if getattr(obj, "_pending_sha", None):
+            return None
+        return super().log_addition(request, obj, message)
+
+    def preview_view(self, request, sha):
+        if not self.has_add_permission(request):
+            raise PermissionDenied
+        found = pending.load(sha)
+        if found is None:
+            raise Http404("That preview has expired or was confirmed already.")
+        raw, meta = found
+        from rounds.models import RoundsEvent
+
+        event = RoundsEvent.objects.for_programs(self._programs_for(request)[1]).filter(
+            pk=meta["event_id"]
+        ).first()
+        if event is None:
+            raise Http404
+        export = teams.parse_export(raw)
+        order = check_export_against_event(export, event)
+
+        if request.method == "POST":
+            if request.POST.get("action") == "cancel":
+                pending.discard(sha)
+                self.message_user(request, "Nothing was stored.", messages.INFO)
+                return redirect("admin:attendance_attendanceupload_changelist")
+            stored, export = upload_teams_export(
+                SimpleUploadedFile(meta["filename"], raw), event=event, user=request.user, request=request
+            )
+            pending.discard(sha)
+            unmatched = stored.records.filter(person__isnull=True).count()
+            self.message_user(
+                request,
+                f"Stored and read {stored.row_count} rows for {stored.event}. {unmatched} could not "
+                "be matched by email and wait in the review queue (Attendance records, filter "
+                "Unmatched). Nothing counts for credit until the event is signed off.",
+                messages.SUCCESS,
+            )
+            return redirect("admin:attendance_attendanceupload_change", stored.pk)
+
+        report = pending.preview_teams(export, event, order)
+        context = {
+            **self.admin_site.each_context(request),
+            "title": f"Preview: {meta['filename']}",
+            "opts": self.model._meta,
+            "report": report,
+            "sessions": list(event.sessions.order_by("start_at", "position")),
+            "sha": sha,
+            "filename": meta["filename"],
+            "date_reading": "month/day/year" if order == teams.MONTH_FIRST else "day/month/year",
+            "export_start": export.start.text,
+            "signoff_url": reverse("admin:rounds_roundsevent_signoff", args=[event.pk]),
+        }
+        return TemplateResponse(request, "admin/attendance/attendanceupload/preview.html", context)
 
     @admin.display(description="Parser warnings")
     def warnings_display(self, obj):

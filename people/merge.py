@@ -73,33 +73,49 @@ def person_links():
     return sorted(links, key=lambda link: (link[0]._meta.label_lower, link[1]))
 
 
+# Conditional unique constraints on a person link, and the condition that
+# selects the rows it applies to. Any other conditional constraint makes the
+# merge refuse until someone decides how it behaves.
+CONDITIONAL_UNIQUE = {
+    # One scan per person per session. Two merged records that both scanned
+    # the same session are a collision a human resolves, like two evaluations.
+    "attendancerecord_one_qr_scan_per_session": {"source": "qr_signin"},
+}
+
+
 def _unique_sets(model, field_name):
-    """Groups of other fields that, together with field_name, must be unique."""
+    """(other fields, extra filter) groups that, with field_name, must be unique."""
     if model._meta.get_field(field_name).unique:
-        yield []
+        yield [], {}
     for constraint in model._meta.constraints:
         if isinstance(constraint, UniqueConstraint) and field_name in constraint.fields:
             if constraint.condition is not None:
-                # PersonEmail's one-primary rule is the only one, and the
-                # merge handles it by demoting moved addresses.
+                # PersonEmail's one-primary rule is handled by demoting moved
+                # addresses; the others are listed above or refused.
                 if model is PersonEmail:
                     continue
-                raise NotImplementedError(
-                    f"{constraint.name}: conditional uniqueness on a person link "
-                    "needs explicit handling in people/merge.py."
-                )
-            yield [name for name in constraint.fields if name != field_name]
+                if constraint.name not in CONDITIONAL_UNIQUE:
+                    raise NotImplementedError(
+                        f"{constraint.name}: conditional uniqueness on a person link "
+                        "needs explicit handling in people/merge.py."
+                    )
+                extra = CONDITIONAL_UNIQUE[constraint.name]
+            else:
+                extra = {}
+            yield [name for name in constraint.fields if name != field_name], extra
 
 
 def find_collisions(survivor, duplicate):
     """Rows the two records both hold where the schema allows only one."""
     collisions = []
     for model, field_name in person_links():
-        for others in _unique_sets(model, field_name):
+        for others, extra in _unique_sets(model, field_name):
             other_fields = [model._meta.get_field(name) for name in others]
-            for duplicate_row in model._base_manager.filter(**{field_name: duplicate}):
+            for duplicate_row in model._base_manager.filter(**{field_name: duplicate}, **extra):
                 same = {f.attname: getattr(duplicate_row, f.attname) for f in other_fields}
-                survivor_row = model._base_manager.filter(**{field_name: survivor}, **same).first()
+                survivor_row = model._base_manager.filter(
+                    **{field_name: survivor}, **same, **extra
+                ).first()
                 if survivor_row is not None:
                     names = " and ".join(f.verbose_name for f in other_fields)
                     collisions.append(

@@ -40,6 +40,8 @@ REVIEW_THRESHOLD_MINUTES = 15
 REVIEW_CLAIMS_MORE = "claims more than was recorded"
 REVIEW_SELF_REPORTED_ONLY = "self-reported only"
 REVIEW_OVER_SESSION_LENGTH = "rows add up to more than a session lasted (duplicate manual row?)"
+REVIEW_SOURCES_DISAGREE = "attendance sources disagree"
+REVIEW_TICK_ONLY = "only a sign-in tick or scan says they were there"
 
 
 def rate_per_hour(program, kind):
@@ -94,18 +96,32 @@ class SessionCredit:
     evaluated: bool  # a complete evaluation of this session exists
     self_reported_minutes: int | None  # None when there is no evaluation
     presented: bool = False  # in SessionPresenter for this session
+    # Minutes a staff member has signed off, or None while nothing has been.
+    confirmed_minutes: int | None = None
     review_reasons: tuple = ()
 
     @property
     def credited_minutes(self):
         """
-        Attendance minutes that count: the minutes as recorded, however few,
-        once the session is evaluated. None for a session they presented:
-        that time is teaching.
+        Attendance minutes that count toward PROPOSED credit: the minutes as
+        recorded, however few, once the session is evaluated. None for a
+        session they presented: that time is teaching.
         """
         if self.presented:
             return 0
         return self.minutes if self.evaluated else 0
+
+    @property
+    def confirmed_credited_minutes(self):
+        """Attendance minutes that count toward CONFIRMED credit: signed off and evaluated."""
+        if self.presented or self.confirmed_minutes is None:
+            return 0
+        return self.confirmed_minutes if self.evaluated else 0
+
+    @property
+    def awaiting_signoff(self):
+        """Has minutes on record but nobody has signed them off yet."""
+        return not self.presented and self.minutes > 0 and self.confirmed_minutes is None
 
     @property
     def teaching_minutes(self):
@@ -126,14 +142,29 @@ class CreditBreakdown:
     # The program's rates when this was computed; what a certificate line snapshots.
     attendance_rate_per_hour: Decimal = Decimal("1.00")
     teaching_rate_per_hour: Decimal = Decimal("1.00")
-    attendance_computed: Decimal = ZERO
+    attendance_computed: Decimal = ZERO  # from proposed minutes
+    attendance_confirmed_computed: Decimal = ZERO  # from signed-off minutes only
     attendance_adjustment: Decimal = ZERO
     teaching_computed: Decimal = ZERO
     teaching_adjustment: Decimal = ZERO
 
     @property
     def attendance_credits(self):
+        """Proposed attendance credit: what the credits page shows, marked pending."""
         return max(self.attendance_computed + self.attendance_adjustment, ZERO)
+
+    @property
+    def attendance_confirmed_credits(self):
+        """Confirmed attendance credit: what a certificate prints."""
+        return max(self.attendance_confirmed_computed + self.attendance_adjustment, ZERO)
+
+    @property
+    def awaiting_signoff(self):
+        return [s.session for s in self.sessions if s.awaiting_signoff]
+
+    @property
+    def fully_confirmed(self):
+        return not self.awaiting_signoff
 
     @property
     def teaching_credits(self):
@@ -219,8 +250,11 @@ def creditable_time(person, event):
     resting on a self-report alone, or hours-only rows adding up to more
     than a session lasted.
     """
+    from attendance.signoff import confirmed_minutes as signed_off
+
     recorded = attended_minutes(person, event)
     presented = presented_session_ids(person, event)
+    confirmed = signed_off(person, event)
     submissions = {
         s.session_id: s
         for s in EvaluationSubmission.objects.for_person(person).filter(session__event=event)
@@ -242,6 +276,10 @@ def creditable_time(person, event):
                     reasons.append(REVIEW_CLAIMS_MORE)
                 if share.capped_seconds:
                     reasons.append(REVIEW_OVER_SESSION_LENGTH)
+                if share.disagree:
+                    reasons.append(REVIEW_SOURCES_DISAGREE)
+                if share.tick_only:
+                    reasons.append(REVIEW_TICK_ONLY)
         elif claimed is not None and not is_presenter:
             minutes = min(claimed, session.length_minutes)
             source = MinutesSource.SELF_REPORTED
@@ -258,6 +296,7 @@ def creditable_time(person, event):
                 evaluated=evaluated,
                 self_reported_minutes=claimed,
                 presented=is_presenter,
+                confirmed_minutes=confirmed.get(session.pk),
                 review_reasons=tuple(reasons),
             )
         )
@@ -282,6 +321,11 @@ def credit_breakdown(person, event):
     event first, so hundredths are cut once per kind, not per session.
     The rates come from the event's program and are returned alongside, so
     a certificate line can snapshot what they were.
+
+    Attendance exists twice: PROPOSED, from attended_minutes, which the
+    credits page shows as pending; and CONFIRMED, from the current
+    SessionAttendanceDecision per session, which a certificate prints.
+    Teaching needs no sign-off: it is the length of the talks they gave.
     """
     sessions, source = creditable_time(person, event)
     program = event.program
@@ -291,6 +335,10 @@ def credit_breakdown(person, event):
         credits_for_minutes(sum(s.credited_minutes for s in sessions), attendance_rate),
         event.accredited_credits,
     ).quantize(ZERO)
+    confirmed = min(
+        credits_for_minutes(sum(s.confirmed_credited_minutes for s in sessions), attendance_rate),
+        event.accredited_credits,
+    ).quantize(ZERO)
     teaching = credits_for_minutes(sum(s.teaching_minutes for s in sessions), teaching_rate)
     return CreditBreakdown(
         sessions=sessions,
@@ -298,6 +346,7 @@ def credit_breakdown(person, event):
         attendance_rate_per_hour=attendance_rate,
         teaching_rate_per_hour=teaching_rate,
         attendance_computed=attendance,
+        attendance_confirmed_computed=confirmed,
         attendance_adjustment=adjustment_credits(person, event, ATTENDANCE),
         teaching_computed=teaching,
         teaching_adjustment=adjustment_credits(person, event, TEACHING),

@@ -59,6 +59,15 @@ class EventStanding:
         return self.breakdown.teaching_credits
 
     @property
+    def confirmed_attendance(self):
+        """Attendance credit on signed-off minutes: what a certificate would print today."""
+        return self.breakdown.attendance_confirmed_credits
+
+    @property
+    def awaiting_signoff(self):
+        return bool(self.breakdown.awaiting_signoff)
+
+    @property
     def uncertified_attendance(self):
         return self.earned_attendance - self.certified_attendance
 
@@ -121,6 +130,10 @@ class ProgramStanding:
     @property
     def earned_teaching(self):
         return sum((s.earned_teaching for s in self.standings), ZERO)
+
+    @property
+    def confirmed_attendance(self):
+        return sum((s.confirmed_attendance for s in self.standings), ZERO)
 
     @property
     def certified_attendance(self):

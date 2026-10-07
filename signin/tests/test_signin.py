@@ -257,7 +257,20 @@ def test_the_credits_page_shows_a_total_per_program_with_rates_and_pending(ada):
     text = page.content.decode()
     assert "Total for Emergency Medicine" in text and "Total for Internal Medicine" in text
     assert "1.50/h" in text  # the rate per event, so a mid-year change is visible
-    assert "pending" in text  # nothing certified yet
+    assert "pending sign-off" in text  # nothing confirmed yet
+    assert [str(p.confirmed_attendance) for p in programs] == ["0.00", "0.00"]
+    assert "0.00 confirmed (1.00 proposed)" in text
+
+    # Once the office signs the event off, the figure is confirmed, not yet certified.
+    from attendance.signoff import confirm_event
+    from django.contrib.auth import get_user_model
+
+    boss = get_user_model().objects.create_superuser(username="boss", password="x" * 20)
+    confirm_event(em_event, user=boss)
+    page = signed_in_client("ada@mcgill.ca").get(reverse("signin:me"))
+    text = page.content.decode()
+    assert "1.00 <span class=\"pending\">not yet certified</span>" in text
+    assert "1.00 confirmed</th>" in text
 
 
 def test_the_credits_page_lists_talks_to_evaluate_and_can_ask_for_another_week(ada, monkeypatch):

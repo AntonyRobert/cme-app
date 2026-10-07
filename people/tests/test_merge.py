@@ -270,6 +270,7 @@ def test_every_link_to_a_person_is_accounted_for():
     """
     assert [(model._meta.label_lower, name) for model, name in person_links()] == [
         ("attendance.attendancerecord", "person"),
+        ("attendance.sessionattendancedecision", "person"),
         ("certificates.certificate", "person"),
         ("credits.creditadjustment", "person"),
         ("credits.evaluationsubmission", "person"),
@@ -278,3 +279,20 @@ def test_every_link_to_a_person_is_accounted_for():
         ("rounds.coideclaration", "person"),
         ("rounds.sessionpresenter", "person"),
     ]
+
+
+def test_two_scans_of_the_same_session_stop_the_merge(pair, staff):
+    """Each record scanned the same talk: a human picks, like two evaluations."""
+    from attendance.models import AttendanceRecord
+
+    survivor, duplicate = pair
+    event = make_event()
+    session = event.sessions.get()
+    for person in (survivor, duplicate):
+        AttendanceRecord.objects.create(
+            source="qr_signin", event=event, session=session, person=person,
+            match_method="manual", created_by=staff,
+        )
+    with pytest.raises(MergeCollision) as err:
+        merge_people(survivor, duplicate, user=staff)
+    assert "attendance record" in str(err.value)

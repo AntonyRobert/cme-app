@@ -1,0 +1,68 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls dicts %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+  &rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+  &rsaquo; {{ title }}
+</div>
+{% endblock %}
+
+{% block content %}
+<p><strong>Nothing has been stored yet.</strong> This is what the system understood from
+<code>{{ filename }}</code>. Confirm to store the file and its rows, or cancel to discard it.</p>
+
+<h2>Event</h2>
+<table>
+  <tr><th>Matched event</th><td>{{ report.event }} ({{ report.event.program }})</td></tr>
+  <tr><th>Meeting title in the file</th><td>{{ report.export.title }}</td></tr>
+  <tr><th>Date in the file</th><td>{{ export_start }}, read as <strong>{{ date_reading }}</strong> because that is the event's date</td></tr>
+  <tr><th>Participants</th><td>{{ report.participants|length }} people, {{ report.row_count }} join rows</td></tr>
+</table>
+
+<p class="help">{{ report.rule }}</p>
+
+{% if report.warnings %}
+<h2>Parser warnings</h2>
+<ul>{% for warning in report.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+{% endif %}
+
+<h2>Participants</h2>
+<table>
+  <thead>
+    <tr>
+      <th>As recorded</th>
+      <th>Matched to</th>
+      <th>Rows</th>
+      {% for session in sessions %}<th>{{ session.position }}. {{ session.title|truncatechars:28 }}</th>{% endfor %}
+      <th>Total</th>
+      <th>Worth a look</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for p in report.participants %}
+    <tr{% if p.flags %} class="errors"{% endif %}>
+      <td>{{ p.display_name }}{% if p.email %}<br><small>{{ p.email }}</small>{% endif %}</td>
+      <td>{% if p.person %}{{ p.person }}{% else %}<strong>nobody</strong>{% endif %}</td>
+      <td>{{ p.rows }}</td>
+      {% for session in sessions %}
+        <td>{{ p.minutes|get_item:session }}{% with existing=p.existing|get_item:session %}{% if existing %}<br><small class="help">stored: {% for claim, minutes in existing.items %}{{ claim|claim_label }} {{ minutes }}{% if not forloop.last %}, {% endif %}{% endfor %}</small>{% endif %}{% endwith %}</td>
+      {% endfor %}
+      <td>{{ p.total_minutes }}</td>
+      <td>{% for flag in p.flags %}{{ flag }}{% if not forloop.last %}<br>{% endif %}{% endfor %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<form method="post">
+  {% csrf_token %}
+  <div class="submit-row">
+    <input type="submit" class="default" name="action" value="confirm">
+    <button type="submit" name="action" value="cancel" class="closelink">Cancel and discard</button>
+  </div>
+  <p class="help">After confirming, go to <a href="{{ signoff_url }}">the event's sign-off page</a>:
+  {{ report.unmatched|length }} row(s) will wait in the review queue first.</p>
+</form>
+{% endblock %}

@@ -5,7 +5,9 @@ Issuing (the PDF, saving the snapshot, the verification page) is not
 built yet. This is the calculation it will snapshot, kept separate so it
 can be checked now: one line per event with attendance and teaching kept
 apart, and an exact total per kind. Never one blended figure, never
-rounded.
+rounded. Attendance figures are CONFIRMED minutes only; an event with
+unconfirmed attendance refuses (NotSignedOff) rather than printing a
+figure nobody signed off.
 """
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -14,6 +16,18 @@ from credits.reports import person_events
 from credits.rules import credit_breakdown
 
 from .rules import certificate_total
+
+
+class NotSignedOff(Exception):
+    """A certificate cannot be issued while attendance in the period is unconfirmed."""
+
+    def __init__(self, person, event, sessions):
+        self.person, self.event, self.sessions = person, event, sessions
+        titles = ", ".join(s.title for s in sessions)
+        super().__init__(
+            f"{person} has attendance at {event} not yet signed off ({titles}). "
+            "Confirm it before issuing."
+        )
 
 
 @dataclass(frozen=True)
@@ -67,20 +81,24 @@ def certificate_figures(person, program, period_start, period_end):
         program=program, date__gte=period_start, date__lte=period_end
     ):
         b = credit_breakdown(person, event)
-        if not (b.attendance_credits or b.teaching_credits):
+        if not (b.attendance_confirmed_credits or b.teaching_credits):
             continue
+        if not b.fully_confirmed:
+            raise NotSignedOff(person, event, b.awaiting_signoff)
         lines.append(
             LineFigures(
                 event=event,
                 event_title=event.title,
                 event_date=event.date,
                 session_titles=[s.title for s in b.sessions_attended],
-                attended_minutes=sum(s.minutes for s in b.sessions if not s.presented),
+                attended_minutes=sum(
+                    s.confirmed_minutes or 0 for s in b.sessions if not s.presented
+                ),
                 minutes_source=b.source,
                 attendance_rate_per_hour=b.attendance_rate_per_hour,
-                attendance_computed=b.attendance_computed,
+                attendance_computed=b.attendance_confirmed_computed,
                 attendance_adjustment=b.attendance_adjustment,
-                attendance_credits=b.attendance_credits,
+                attendance_credits=b.attendance_confirmed_credits,
                 presented_session_titles=[s.title for s in b.sessions_presented],
                 teaching_minutes=b.teaching_minutes,
                 teaching_rate_per_hour=b.teaching_rate_per_hour,

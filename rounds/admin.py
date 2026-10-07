@@ -1,6 +1,11 @@
 from django import forms
 from django.conf import settings
 from django.contrib import admin, messages
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.http import Http404
+from django.shortcuts import redirect
+from django.template.response import TemplateResponse
+from django.urls import path, reverse
 from django.db.models import Count, Q
 from django.utils import timezone
 from django.utils.html import format_html, format_html_join
@@ -81,17 +86,18 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
         "session_count",
         "attendance_rows",
         "unmatched_rows",
+        "signoff_state",
     ]
     list_filter = ["program", "status"]
     date_hierarchy = "date"
     search_fields = ["title", "teams_meeting_title", "sessions__title"]
     inlines = [SessionInline]
-    readonly_fields = ["credit_summary"]
+    readonly_fields = ["credit_summary", "signoff_link"]
     fieldsets = [
         (
             None,
             {
-                "fields": ["program", "title", "date", "status", "accredited_credits"],
+                "fields": ["program", "title", "date", "status", "accredited_credits", "signoff_link"],
                 "description": "A blank title takes the program's series name; blank credits "
                 "take the program's default.",
             },
@@ -150,6 +156,105 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
             return "0"
         url = changelist_url(AttendanceRecord, event__id__exact=obj.pk, matched="no")
         return format_html('<a href="{}"><strong>{} to review</strong></a>', url, obj._unmatched)
+
+    # --- Sign-off ------------------------------------------------------------
+
+    def get_urls(self):
+        return [
+            path(
+                "<uuid:pk>/signoff/",
+                self.admin_site.admin_view(self.signoff_view),
+                name="rounds_roundsevent_signoff",
+            ),
+            *super().get_urls(),
+        ]
+
+    @admin.display(description="Sign-off")
+    def signoff_link(self, obj):
+        if not obj.pk:
+            return "-"
+        return format_html(
+            '<a class="button" href="{}">Review and sign off attendance</a>',
+            reverse("admin:rounds_roundsevent_signoff", args=[obj.pk]),
+        )
+
+    @admin.display(description="Signed off")
+    def signoff_state(self, obj):
+        from attendance.signoff import review
+
+        rows = [s for pr in review(obj) for s in pr.sessions if s.attendance.sources and not s.presented]
+        if not rows:
+            return "-"
+        done = sum(1 for s in rows if s.is_confirmed)
+        url = reverse("admin:rounds_roundsevent_signoff", args=[obj.pk])
+        label = f"{done}/{len(rows)}"
+        return format_html('<a href="{}">{}</a>', url, label) if done < len(rows) else label
+
+    def signoff_view(self, request, pk):
+        from attendance.signoff import confirm_event, confirm_person, review, unmatched_sessions
+        from people.models import Person
+
+        event = self.get_queryset(request).filter(pk=pk).first()
+        if event is None:
+            raise Http404
+        if not self.has_change_permission(request, event):
+            raise PermissionDenied
+
+        if request.method == "POST":
+            action = request.POST.get("action")
+            if action == "confirm_event":
+                result = confirm_event(event, user=request.user, request=request)
+                self.message_user(
+                    request,
+                    f"Confirmed {len(result.confirmed)} session attendance(s) where the sources "
+                    f"agree. {len(result.held)} held back for a look.",
+                    messages.SUCCESS,
+                )
+            elif action == "confirm_person":
+                person = Person.objects.filter(pk=request.POST.get("person")).first()
+                choices = {}
+                for session in event.sessions.all():
+                    key = str(session.pk)
+                    if request.POST.get(f"include_{key}"):
+                        value = request.POST.get(f"minutes_{key}", "").strip()
+                        choices[key] = int(value) if value.isdigit() else None
+                try:
+                    if person is None or not choices:
+                        raise ValidationError("Choose at least one session to confirm.")
+                    written = confirm_person(
+                        event, person, choices,
+                        user=request.user, comment=request.POST.get("comment", "").strip(),
+                        request=request,
+                    )
+                except ValidationError as error:
+                    for message in error.messages:
+                        self.message_user(request, message, messages.ERROR)
+                except ValueError:
+                    self.message_user(request, "Minutes must be whole numbers.", messages.ERROR)
+                else:
+                    self.message_user(
+                        request, f"Signed off {len(written)} session(s) for {person}.", messages.SUCCESS
+                    )
+            return redirect("admin:rounds_roundsevent_signoff", event.pk)
+
+        from attendance.models import AttendanceRecord
+
+        reviews = review(event)
+        unmatched = unmatched_sessions(event)
+        context = {
+            **self.admin_site.each_context(request),
+            "title": f"Sign off attendance: {event}",
+            "opts": self.model._meta,
+            "event": event,
+            "sessions": list(event.sessions.order_by("start_at", "position")),
+            "reviews": reviews,
+            "unmatched_total": AttendanceRecord.objects.active().unmatched().filter(event=event).count(),
+            "unmatched_by_session": unmatched,
+            "queue_url": changelist_url(AttendanceRecord, event__id__exact=event.pk, matched="no"),
+            "bulk_ready": sum(1 for pr in reviews for s in pr.sessions if s.can_bulk_confirm),
+            "held_people": [pr for pr in reviews if pr.held],
+        }
+        return TemplateResponse(request, "admin/rounds/roundsevent/signoff.html", context)
 
     @admin.display(description="Per person")
     def credit_summary(self, obj):

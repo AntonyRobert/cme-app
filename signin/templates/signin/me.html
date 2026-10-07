@@ -36,8 +36,9 @@
 {% for program in programs %}
 <h2>{{ program.program.name }}</h2>
 <p class="muted">{{ program.program.institution.name }}. Credits are hours attended or presented, at this
-program's rates. Figures marked pending are waiting to be confirmed by the program office;
-nothing is certified until it is.</p>
+program's rates. Attendance counts once the program office has signed off the event's
+attendance; until then the figure is what the records propose, marked pending. Nothing is
+on a certificate until it is issued.</p>
 <table>
   <thead>
     <tr><th>Date</th><th>Rounds</th><th>Attended</th><th>Evaluated</th><th>Rate</th><th>Attendance</th><th>Teaching</th></tr>
@@ -50,13 +51,13 @@ nothing is certified until it is.</p>
       <td>{{ s.breakdown.sessions_attended|length }}/{{ s.breakdown.sessions|length }}{% if s.breakdown.sessions_presented %} (+{{ s.breakdown.sessions_presented|length }} presented){% endif %}</td>
       <td>{{ s.breakdown.sessions_evaluated|length }}/{{ s.breakdown.sessions|length }}</td>
       <td>{{ s.breakdown.attendance_rate_per_hour }}/h{% if s.breakdown.sessions_presented %}, {{ s.breakdown.teaching_rate_per_hour }}/h teaching{% endif %}</td>
-      <td>{{ s.earned_attendance }}{% if s.certified_attendance != s.earned_attendance %} <span class="pending">pending</span>{% endif %}</td>
-      <td>{{ s.earned_teaching }}{% if s.certified_teaching != s.earned_teaching %} <span class="pending">pending</span>{% endif %}</td>
+      <td>{% if s.awaiting_signoff %}{{ s.earned_attendance }} <span class="pending">pending sign-off</span>{% else %}{{ s.confirmed_attendance }}{% if s.certified_attendance != s.confirmed_attendance %} <span class="pending">not yet certified</span>{% endif %}{% endif %}</td>
+      <td>{{ s.earned_teaching }}{% if s.certified_teaching != s.earned_teaching %} <span class="pending">not yet certified</span>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
   <tfoot>
-    <tr><th colspan="5">Total for {{ program.program.name }}</th><th>{{ program.earned_attendance }}</th><th>{{ program.earned_teaching }}</th></tr>
+    <tr><th colspan="5">Total for {{ program.program.name }}</th><th>{{ program.confirmed_attendance }} confirmed{% if program.earned_attendance != program.confirmed_attendance %} ({{ program.earned_attendance }} proposed){% endif %}</th><th>{{ program.earned_teaching }}</th></tr>
   </tfoot>
 </table>
 {% empty %}

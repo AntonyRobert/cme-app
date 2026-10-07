@@ -5,9 +5,10 @@ from decimal import Decimal
 import pytest
 
 from attendance.tests.factories import teams_row
-from certificates.figures import CertificateFigures, LineFigures, certificate_figures
+from attendance.signoff import confirm_event
+from certificates.figures import CertificateFigures, LineFigures, NotSignedOff, certificate_figures
 from credits.tests.factories import evaluate
-from people.tests.factories import make_person
+from people.tests.factories import make_person, make_staff
 from programs.tests.factories import make_program
 from rounds.models import SessionPresenter
 from rounds.tests.factories import EVENT_START, make_event, make_session
@@ -36,6 +37,13 @@ def test_a_presenter_who_also_attends_gets_both_kinds_on_separate_lines():
     two_weeks = 14 * 24 * 60  # teams_row counts minutes from the first event's start
     teams_row(second_event, person, two_weeks, two_weeks + 59)
     evaluate(person, b1)
+
+    # Nothing prints until the attendance is signed off.
+    with pytest.raises(NotSignedOff):
+        certificate_figures(person, make_program(), *YEAR)
+    staff = make_staff()
+    confirm_event(first_event, user=staff)
+    confirm_event(second_event, user=staff)
 
     figures = certificate_figures(person, make_program(), *YEAR)
 
@@ -78,6 +86,18 @@ def test_events_with_no_credit_of_either_kind_are_left_off():
     event, talks = three_talks()
     teams_row(event, person, 0, 180)  # attended, evaluated nothing
     assert certificate_figures(person, make_program(), *YEAR).lines == []
+
+
+def test_a_line_prints_confirmed_minutes_not_proposed_ones():
+    person = make_person()
+    event, (a1, _, _) = three_talks()
+    teams_row(event, person, 0, 60)
+    evaluate(person, a1)
+    from attendance.signoff import confirm_person
+
+    confirm_person(event, person, {a1.pk: 45}, user=make_staff(), comment="Left early per chair")
+    [line] = certificate_figures(person, make_program(), *YEAR).lines
+    assert (line.attended_minutes, line.attendance_credits) == (45, D("0.75"))
 
 
 def test_events_outside_the_period_are_left_off():

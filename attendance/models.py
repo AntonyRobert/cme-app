@@ -93,8 +93,19 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
 
     class Source(models.TextChoices):
         TEAMS_UPLOAD = "teams_upload", "Teams upload"
+        SIGNIN_SHEET = "signin_sheet", "Sign-in sheet"
+        QR_SIGNIN = "qr_signin", "QR sign-in"
         MANUAL = "manual", "Manual"
         ROOM_ROSTER = "room_roster", "Room roster"
+
+    # Sources that come from a stored file.
+    UPLOADED_SOURCES = {"teams_upload"}
+    # Sources entered by staff one row at a time, which need a reason. A sign-in
+    # sheet is also typed in by staff, but from the paper sheet, in one sitting:
+    # the sheet is the reason, so no free text per row.
+    HAND_ENTERED_SOURCES = {"manual", "room_roster"}
+    # Sources whose one row claims the whole session (presence, not duration).
+    WHOLE_SESSION_SOURCES = {"signin_sheet", "qr_signin"}
 
     class MatchMethod(models.TextChoices):
         EMAIL_EXACT = "email_exact", "Email (exact)"
@@ -222,7 +233,7 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
                 name="attendancerecord_hours_only_needs_session",
             ),
             models.CheckConstraint(
-                condition=Q(source="teams_upload")
+                condition=~Q(source__in=["manual", "room_roster"])
                 | (Q(reason__isnull=False) & ~Q(reason="")),
                 name="attendancerecord_non_teams_needs_reason",
             ),
@@ -230,6 +241,18 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
                 condition=Q(source="teams_upload", upload__isnull=False)
                 | (~Q(source="teams_upload") & Q(upload__isnull=True)),
                 name="attendancerecord_upload_iff_teams",
+            ),
+            # A tick or a scan claims a whole session, so it names one and has no times.
+            models.CheckConstraint(
+                condition=~Q(source__in=["signin_sheet", "qr_signin"])
+                | Q(session__isnull=False, join_at__isnull=True),
+                name="attendancerecord_whole_session_sources_name_a_session",
+            ),
+            # One scan per person per session; a second scan is ignored, never a second row.
+            models.UniqueConstraint(
+                fields=["person", "session"],
+                condition=Q(source="qr_signin"),
+                name="attendancerecord_one_qr_scan_per_session",
             ),
             models.CheckConstraint(
                 condition=Q(source="room_roster", attributed_to__isnull=False)
@@ -246,6 +269,10 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
                 name="attendancerecord_match_method_agrees_with_person",
             ),
         ]
+
+    @property
+    def is_whole_session_claim(self):
+        return self.source in self.WHOLE_SESSION_SOURCES
 
     def __str__(self):
         who = self.person or self.raw_display_name or self.raw_email or "unknown"
@@ -273,6 +300,13 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
                 self.duration_seconds = self.attributed_to.duration_seconds
         if self.duration_seconds is None and self.join_at and self.leave_at:
             self.duration_seconds = max(int((self.leave_at - self.join_at).total_seconds()), 0)
+        if (
+            self.source in self.WHOLE_SESSION_SOURCES
+            and self.duration_seconds is None
+            and self.session_id
+        ):
+            # Presence, not duration: the claim is the whole session.
+            self.duration_seconds = self.session.length_seconds
         if self.person_id is None:
             self.match_method = self.MatchMethod.UNMATCHED
         elif self.match_method == self.MatchMethod.UNMATCHED:
@@ -282,7 +316,7 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
         super().clean()
         self._fill_defaults()
         errors = {}
-        if self.source != self.Source.TEAMS_UPLOAD and not (self.reason or "").strip():
+        if self.source in self.HAND_ENTERED_SOURCES and not (self.reason or "").strip():
             errors["reason"] = "Say why this row is being added by hand."
         if self.source == self.Source.ROOM_ROSTER:
             if not self.attributed_to_id:
@@ -361,3 +395,93 @@ class AttendanceSupersession(AppendOnlyMixin, UUIDModel):
         if self._state.adding:
             self.clean()
         super().save(*args, **kwargs)
+
+
+class SessionAttendanceDecisionQuerySet(PersonOwnedQuerySet, ProgramScopedQuerySet):
+    program_lookup = "session__event__program"
+
+    def current(self):
+        """Decisions nothing supersedes: one per person and session at most."""
+        return self.filter(superseded_by__isnull=True)
+
+
+class SessionAttendanceDecision(AppendOnlyMixin, UUIDModel):
+    """
+    One staff member's sign-off of one person's minutes for one session.
+
+    Credit on a certificate counts only confirmed minutes. Append-only: a
+    correction is a new decision that supersedes this one and needs its
+    own sign-off. Nothing is edited.
+    """
+
+    class Basis(models.TextChoices):
+        SOURCES_AGREE = "sources_agree", "Sources agree"
+        HIGHEST_CLAIM = "highest_claim", "Highest claim, chosen by a person"
+        MANUAL = "manual", "Set by hand"
+
+    person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="attendance_decisions")
+    session = models.ForeignKey(Session, on_delete=models.PROTECT, related_name="attendance_decisions")
+    confirmed_minutes = models.PositiveIntegerField(help_text="What counts. Zero is a valid decision.")
+    proposed_minutes = models.PositiveIntegerField(help_text="What the system proposed at the time.")
+    basis = models.CharField(max_length=20, choices=Basis.choices)
+    based_on = models.JSONField(
+        default=dict, blank=True, help_text="Each source's claim and the row ids, at sign-off."
+    )
+    comment = models.TextField(
+        blank=True, help_text="Required when the confirmed minutes differ from the proposal."
+    )
+    confirmed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+"
+    )
+    confirmed_at = models.DateTimeField(auto_now_add=True)
+    supersedes = models.OneToOneField(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="superseded_by",
+        help_text="The decision this one corrects.",
+    )
+
+    objects = SessionAttendanceDecisionQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["session", "person", "-confirmed_at"]
+        indexes = [models.Index(fields=["session", "person"])]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(confirmed_minutes=F("proposed_minutes")) | ~Q(comment=""),
+                name="sessionattendancedecision_change_needs_comment",
+            ),
+            models.CheckConstraint(
+                condition=Q(supersedes__isnull=True) | ~Q(supersedes=F("id")),
+                name="sessionattendancedecision_not_own_correction",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.person}: {self.confirmed_minutes} min of {self.session} ({self.get_basis_display()})"
+
+    @property
+    def is_current(self):
+        """Nothing saved supersedes this decision. A query, not the reverse cache:
+        building a correction in memory already populates that cache."""
+        return (
+            self.pk is not None
+            and not SessionAttendanceDecision.objects.filter(supersedes_id=self.pk).exists()
+        )
+
+    def clean(self):
+        super().clean()
+        if self.confirmed_minutes != self.proposed_minutes and not (self.comment or "").strip():
+            raise ValidationError({"comment": "Say why the confirmed minutes differ from the proposal."})
+        if self.session_id and self.confirmed_minutes > self.session.length_minutes:
+            raise ValidationError(
+                {"confirmed_minutes": f"The session lasted {self.session.length_minutes} minutes."}
+            )
+        if self.supersedes_id:
+            old = self.supersedes
+            if (old.person_id, old.session_id) != (self.person_id, self.session_id):
+                raise ValidationError({"supersedes": "A correction replaces a decision for the same person and session."})
+            if not old.is_current:
+                raise ValidationError({"supersedes": "That decision has already been corrected."})

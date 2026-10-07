@@ -305,7 +305,7 @@ def fixture_event():
     return make_fixture_event()
 
 
-def test_uploading_an_export_stores_it_and_refuses_it_twice(client, boss, seeded, settings):
+def test_uploading_an_export_previews_first_then_stores_on_confirm(client, boss, seeded, settings):
     from attendance.tests.test_teams import FIXTURE
 
     event = fixture_event()
@@ -319,16 +319,97 @@ def test_uploading_an_export_stores_it_and_refuses_it_twice(client, boss, seeded
 
     response = post()  # no event chosen: found by title and date
     assert response.status_code == 302, response.context["adminform"].form.errors
+    assert "/preview/" in response.url
+    # Nothing is stored until the reviewer confirms: no row, no file, no log entry.
+    before = (AttendanceUpload.objects.count(), AttendanceRecord.objects.count())
+    assert not AttendanceUpload.objects.filter(original_filename="teams-export.csv").exists()
+    assert not AttendanceRecord.objects.filter(event=event).exists()
+    assert not AuditLog.objects.filter(action="attendance.upload_stored", actor_user=boss).exists()
+    assert (AttendanceUpload.objects.count(), AttendanceRecord.objects.count()) == before
+
+    preview = client.get(response.url)
+    assert preview.status_code == 200
+    page = preview.content.decode()
+    assert "Nothing has been stored yet" in page
+    assert "month/day/year" in page  # the date reading chosen, and why
+    assert "The organizer and every participant" in page  # the rule, stated
+    assert "matches nobody" in page  # the unmatched rows are flagged
+    assert str(event.pk) in page or event.title in page
+
+    confirmed = client.post(response.url, {"action": "confirm"})
+    assert confirmed.status_code == 302
     upload = AttendanceUpload.objects.get(original_filename="teams-export.csv")
+    assert confirmed.url == url(AttendanceUpload, "change", upload.pk)
     assert (upload.event, upload.uploaded_by, upload.row_count) == (event, boss, 12)
     assert (settings.UPLOAD_ROOT / upload.stored_path).read_bytes() == content
     assert upload.records.count() == 12
+    assert client.get(response.url).status_code == 404  # the pending copy is gone
+
     again = post(event.pk)
     assert again.status_code == 200
     assert "already uploaded" in str(again.context["adminform"].form.errors)
     page = client.get(url(AttendanceUpload, "change", upload.pk)).content.decode()
     assert "Parser warnings" in page
     assert client.get(url(AttendanceUpload, "delete", upload.pk)).status_code == 403
+
+
+def test_cancelling_a_preview_stores_nothing(client, boss, seeded, settings):
+    from attendance.tests.test_teams import FIXTURE
+
+    fixture_event()
+    response = client.post(
+        url(AttendanceUpload, "add"),
+        {"event": "", "file": SimpleUploadedFile("teams-export.csv", FIXTURE.read_bytes())},
+    )
+    assert response.status_code == 302
+    cancelled = client.post(response.url, {"action": "cancel"})
+    assert cancelled.status_code == 302
+    assert not AttendanceUpload.objects.filter(original_filename="teams-export.csv").exists()
+    assert not AttendanceRecord.objects.filter(event__date=datetime.date(2026, 9, 10)).exists()
+    assert not list((settings.UPLOAD_ROOT / "pending").glob("*"))
+    assert client.get(response.url).status_code == 404
+
+
+def test_a_preview_shows_what_a_second_file_would_disagree_with(client, boss, seeded, settings):
+    """Rows already stored for a person show beside the file's figure, and a gap is flagged."""
+    from attendance.tests.test_teams import FIXTURE
+
+    event = fixture_event()
+    session = event.sessions.order_by("position").first()
+    person = Person.objects.create(given_name="Vincent", family_name="Marchand")
+    PersonEmail.objects.create(person=person, email="vincent.marchand@mcgill.ca")
+    AttendanceRecord.objects.create(
+        event=event,
+        session=session,
+        person=person,
+        source=AttendanceRecord.Source.SIGNIN_SHEET,
+        created_by=boss,
+    )
+    response = client.post(
+        url(AttendanceUpload, "add"),
+        {"event": event.pk, "file": SimpleUploadedFile("teams-export.csv", FIXTURE.read_bytes())},
+    )
+    page = client.get(response.url).content.decode()
+    assert "Vincent Marchand" in page  # 10 min on Teams, a whole-session tick on paper
+    assert "stored:" in page and "sign-in sheet" in page
+    assert "the stored sign-in sheet claim says" in page
+
+
+def test_the_preview_is_scoped_to_the_viewer_s_programs(client, seeded, settings):
+    """A coordinator of another program cannot see a preview stashed for this one."""
+    from attendance import preview as pending
+    from attendance.tests.test_teams import FIXTURE
+    from programs.tests.factories import give_role, make_program
+
+    event = fixture_event()
+    sha = pending.stash(FIXTURE.read_bytes(), "teams-export.csv", event_id=event.pk, user_id=0)
+    other = make_program("Other")
+    user = get_user_model().objects.create_user(username="elsewhere", password="x" * 20, is_staff=True)
+    give_role(user, other, "coordinator")
+    client.force_login(user)
+    response = client.get(reverse("admin:attendance_attendanceupload_preview", args=[sha]))
+    assert response.status_code == 404
+    assert pending.load(sha) is not None  # and it was not discarded by the attempt
 
 
 def test_an_export_for_another_event_is_refused_and_nothing_is_stored(client, boss, seeded, settings):
@@ -345,6 +426,143 @@ def test_an_export_for_another_event_is_refused_and_nothing_is_stored(client, bo
     teams_dir = settings.UPLOAD_ROOT / "teams"
     stored = list(teams_dir.glob("*")) if teams_dir.exists() else []
     assert len(stored) == AttendanceUpload.objects.count()  # no file without its row
+    pending_dir = settings.UPLOAD_ROOT / "pending"
+    assert not (pending_dir.exists() and list(pending_dir.glob("*")))  # nothing stashed either
+
+
+# --- Sign-off ----------------------------------------------------------------
+
+
+def signoff_url(event):
+    return reverse("admin:rounds_roundsevent_signoff", args=[event.pk])
+
+
+def import_fixture(client, event):
+    from attendance.tests.test_teams import FIXTURE
+
+    response = client.post(
+        url(AttendanceUpload, "add"),
+        {"event": event.pk, "file": SimpleUploadedFile("teams-export.csv", FIXTURE.read_bytes())},
+    )
+    assert client.post(response.url, {"action": "confirm"}).status_code == 302
+    return AttendanceUpload.objects.get(original_filename="teams-export.csv")
+
+
+def test_sign_off_page_lists_people_and_holds_back_what_needs_a_look(client, boss, seeded):
+    from attendance.models import SessionAttendanceDecision
+
+    event = fixture_event()
+    camille = Person.objects.create(given_name="Camille", family_name="Thibault")
+    PersonEmail.objects.create(person=camille, email="camille.thibault@mcgill.ca")
+    import_fixture(client, event)
+    page = client.get(signoff_url(event))
+    assert page.status_code == 200
+    html = page.content.decode()
+    assert "Thibault, Camille" in html
+    # Unmatched rows block the sessions they touch; the page says so and links the queue.
+    unmatched = AttendanceRecord.objects.active().unmatched().filter(event=event).count()
+    assert unmatched > 0
+    assert f"{unmatched} attendance row(s) are still unmatched" in html
+    assert "matched=no" in html
+    assert "the session has unmatched rows" in html
+    # Nothing can be bulk-confirmed while the queue is not empty.
+    assert "disabled" in html
+    client.post(signoff_url(event), {"action": "confirm_event"})
+    assert SessionAttendanceDecision.objects.count() == 0
+
+
+def clear_queue(event, user):
+    """Match every unmatched row to a fresh person so sign-off can proceed."""
+    from attendance.services import match_record
+
+    for row in AttendanceRecord.objects.active().unmatched().filter(event=event):
+        words = row.raw_display_name.replace(",", "").split()
+        person = Person.objects.create(given_name=words[0], family_name=words[1])
+        match_record(row, person, user=user)
+
+
+def test_confirm_event_confirms_agreeing_rows_and_holds_the_rest(client, boss, seeded):
+    from attendance.models import SessionAttendanceDecision
+    from attendance.signoff import review
+
+    event = fixture_event()
+    import_fixture(client, event)
+    clear_queue(event, boss)
+    ready = sum(1 for pr in review(event) for s in pr.sessions if s.can_bulk_confirm)
+    assert ready > 0
+    response = client.post(signoff_url(event), {"action": "confirm_event"})
+    assert response.status_code == 302
+    assert SessionAttendanceDecision.objects.count() == ready
+    assert set(SessionAttendanceDecision.objects.values_list("basis", flat=True)) == {"sources_agree"}
+    assert set(SessionAttendanceDecision.objects.values_list("confirmed_by", flat=True)) == {boss.pk}
+    assert AuditLog.objects.filter(action="attendance.event_confirmed").count() == 1
+    html = client.get(signoff_url(event)).content.decode()
+    assert "(signed off)" in html
+    # A second press does nothing: every row is already decided.
+    client.post(signoff_url(event), {"action": "confirm_event"})
+    assert SessionAttendanceDecision.objects.count() == ready
+
+
+def test_confirm_person_takes_a_figure_and_needs_a_comment_when_it_differs(client, boss, seeded):
+    from attendance.models import SessionAttendanceDecision
+
+    event = fixture_event()
+    import_fixture(client, event)
+    clear_queue(event, boss)
+    person = AttendanceRecord.objects.active().filter(event=event, person__isnull=False).first().person
+    session = event.sessions.order_by("position").first()
+
+    def post(**extra):
+        return client.post(
+            signoff_url(event),
+            {"action": "confirm_person", "person": person.pk, f"include_{session.pk}": "1", **extra},
+            follow=True,
+        )
+
+    # A figure that differs from the proposal without a comment is refused and nothing is written.
+    response = post(**{f"minutes_{session.pk}": "7"})
+    assert "comment" in response.content.decode().lower()
+    assert SessionAttendanceDecision.objects.count() == 0
+
+    response = post(**{f"minutes_{session.pk}": "7", "comment": "Was in the room; Teams dropped them."})
+    assert "Signed off 1 session(s)" in response.content.decode()
+    decision = SessionAttendanceDecision.objects.get()
+    assert (decision.person, decision.session, decision.confirmed_minutes, decision.basis) == (
+        person, session, 7, "manual",
+    )
+    assert decision.confirmed_by == boss
+    assert AuditLog.objects.filter(action="attendance.person_confirmed").count() == 1
+
+    # Signing off again supersedes rather than edits; both rows stay.
+    post(**{f"minutes_{session.pk}": "8", "comment": "Second look."})
+    assert SessionAttendanceDecision.objects.count() == 2
+    assert SessionAttendanceDecision.objects.current().get().confirmed_minutes == 8
+    assert SessionAttendanceDecision.objects.current().get().supersedes == decision
+
+
+def test_sign_off_is_scoped_to_the_viewer_s_programs(client, seeded):
+    from programs.tests.factories import give_role, make_program
+
+    event = fixture_event()
+    other = make_program("Other")
+    user = get_user_model().objects.create_user(username="elsewhere", password="x" * 20, is_staff=True)
+    give_role(user, other, "coordinator")
+    client.force_login(user)
+    assert client.get(signoff_url(event)).status_code == 404
+    assert client.post(signoff_url(event), {"action": "confirm_event"}).status_code == 404
+
+
+def test_read_only_staff_cannot_sign_off(client, seeded):
+    from attendance.models import SessionAttendanceDecision
+    from programs.tests.factories import give_role
+
+    event = fixture_event()
+    user = get_user_model().objects.create_user(username="reader", password="x" * 20, is_staff=True)
+    give_role(user, event.program, "read_only")
+    client.force_login(user)
+    assert client.get(signoff_url(event)).status_code == 403
+    assert client.post(signoff_url(event), {"action": "confirm_event"}).status_code == 403
+    assert SessionAttendanceDecision.objects.count() == 0
 
 
 def test_a_credit_adjustment_records_who_and_why_and_is_then_frozen(client, boss, seeded):

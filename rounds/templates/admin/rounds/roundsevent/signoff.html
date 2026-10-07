@@ -1,0 +1,91 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls dicts %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+  &rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+  &rsaquo; <a href="{% url opts|admin_urlname:'change' event.pk %}">{{ event }}</a>
+  &rsaquo; Sign off
+</div>
+{% endblock %}
+
+{% block content %}
+<p>Credit counts only confirmed minutes. Each person's minutes per session come from the
+highest of the independent claims (the Teams record with any manual corrections, the
+sign-in sheet, QR scans), capped at the session. The organizer and every participant are
+attendees; presenters' own talks are teaching and are not signed off here.</p>
+
+{% if unmatched_total %}
+<p class="errornote">
+  <strong>{{ unmatched_total }} attendance row(s) are still unmatched.</strong>
+  Sessions they touch cannot be signed off until <a href="{{ queue_url }}">the match queue</a>
+  is cleared: the row might belong to someone already on this list.
+</p>
+{% endif %}
+
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="confirm_event">
+  <div class="submit-row">
+    <input type="submit" class="default" value="Confirm this event: {{ bulk_ready }} session attendance(s) where the sources agree"{% if not bulk_ready %} disabled{% endif %}>
+  </div>
+</form>
+
+{% if held_people %}
+<h2>Held back for a look ({{ held_people|length }} people)</h2>
+<p>Sources disagree, only a tick or a scan says they were there, the session has unmatched
+rows, or they presented it. Pick a figure per session and sign the person off.</p>
+{% endif %}
+
+{% for pr in reviews %}
+<h3 id="person-{{ pr.person.pk }}">
+  <a href="{% url 'admin:people_person_change' pr.person.pk %}">{{ pr.person }}</a>
+  {% if pr.confirmed %}<span class="help">(signed off)</span>{% elif pr.held %}<span class="help">(held: {{ pr.held|length }} session(s))</span>{% endif %}
+</h3>
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="confirm_person">
+  <input type="hidden" name="person" value="{{ pr.person.pk }}">
+  <table>
+    <thead>
+      <tr><th>Session</th><th>Claims (min)</th><th>Proposed</th><th>Decision</th><th>Confirm</th><th>Minutes</th></tr>
+    </thead>
+    <tbody>
+    {% for s in pr.sessions %}
+      <tr{% if s.held_reasons and not s.is_confirmed %} class="errors"{% endif %}>
+        <td>{{ s.session.position }}. {{ s.session.title }}</td>
+        <td>
+          {% for claim, minutes in s.attendance.claim_minutes.items %}{{ claim|claim_label }}: {{ minutes }}{% if not forloop.last %}<br>{% endif %}{% empty %}<span class="help">no rows</span>{% endfor %}
+        </td>
+        <td>{{ s.proposed_minutes }}{% if s.attendance.capped_seconds %} <span class="help">(capped)</span>{% endif %}</td>
+        <td>
+          {% if s.presented %}<span class="help">presented (teaching)</span>
+          {% elif s.is_confirmed %}<strong>{{ s.decision.confirmed_minutes }}</strong> by {{ s.decision.confirmed_by }} on {{ s.decision.confirmed_at|date:"Y-m-d" }}{% if s.stale %} <span class="errornote" style="display:inline;padding:2px 6px">proposal changed since</span>{% endif %}
+          {% else %}<span class="help">not yet</span>{% endif %}
+          {% for reason in s.held_reasons %}{% if not s.is_confirmed and not s.presented %}<br><strong>{{ reason }}</strong>{% endif %}{% endfor %}
+        </td>
+        <td>
+          {% if not s.presented and s.attendance.sources and not s.unmatched_rows %}
+            <input type="checkbox" name="include_{{ s.session.pk }}" value="1"{% if not s.is_confirmed and not s.held_reasons %} checked{% endif %}>
+          {% endif %}
+        </td>
+        <td>
+          {% if not s.presented and s.attendance.sources and not s.unmatched_rows %}
+            <input type="number" name="minutes_{{ s.session.pk }}" min="0" max="{{ s.session.length_minutes }}" value="{{ s.proposed_minutes }}" style="width:5em">
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p>
+    <label for="comment-{{ pr.person.pk }}" style="display:inline">Comment (required when a figure differs from the proposal):</label>
+    <input type="text" id="comment-{{ pr.person.pk }}" name="comment" style="width:30em">
+    <input type="submit" value="Sign off {{ pr.person.given_name }}">
+  </p>
+</form>
+{% empty %}
+<p>No matched attendance rows yet.</p>
+{% endfor %}
+{% endblock %}
