@@ -93,7 +93,7 @@ until it runs.
 /srv/cme/<org>/uploads/    Teams exports and PDFs, owned cme_<org>
 /srv/cme/<org>/staticfiles collected static, served by Caddy
 /etc/cme/<org>.env         settings and the secret key, root 0600
-/run/cme/<org>.sock        gunicorn's socket, 0660, caddy in the group
+/run/cme/<org>/gunicorn.sock  gunicorn's socket; systemd makes the directory for the tenant user on each start
 /etc/caddy/sites/<org>.caddy
 /var/backups/cme/<org>/    nightly dumps
 journalctl -u cme@<org>    application log

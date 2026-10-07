@@ -21,8 +21,8 @@
 #   1. packages: Python 3.12 (Ubuntu's own), git, fail2ban, Postgres 17 (PGDG repo), Caddy (official repo)
 #   2. OS users: cme_<org> (runs gunicorn, owns uploads) and cme_<org>_owner (runs migrate, owns the checkout)
 #   3. Postgres: two peer-authenticated roles matching those users, one database owned by the owner role
-#   4. directories per docs/deployment.md: /srv/cme/<org>, /etc/cme/<org>.env, /run/cme; the deploy key; the checkout (in place, pulled on reruns)
-#   5. systemd: cme@.service template, cme-backup@.service and .timer, /run/cme via tmpfiles
+#   4. directories per docs/deployment.md: /srv/cme/<org>, /etc/cme/<org>.env; the deploy key; the checkout (in place, pulled on reruns)
+#   5. systemd: cme@.service template (which owns /run/cme/<org> via RuntimeDirectory), cme-backup@.service and .timer
 #   6. Caddy: a site block for the hostname proxying to the tenant's socket, static files served directly
 set -euo pipefail
 
@@ -168,7 +168,8 @@ install -d -o "$OWNER_USER" -g "$APP_USER" -m 0750 "$CHECKOUT"
 install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$CHECKOUT/uploads"
 install -d -o root -g root -m 0755 /etc/cme
 install -d -o root -g root -m 0750 "/var/backups/cme/${ORG}"
-install -d -m 0755 /run/cme
+# /run/cme/<org> is NOT made here: systemd creates it for the service user on
+# each start (RuntimeDirectory= in cme@.service). /run is tmpfs.
 
 if [[ ! -f "$ENV_FILE" ]]; then
   SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')"
@@ -222,8 +223,7 @@ say "systemd units"
 install -m 0644 "$HERE/cme@.service" /etc/systemd/system/cme@.service
 install -m 0644 "$HERE/cme-backup@.service" /etc/systemd/system/cme-backup@.service
 install -m 0644 "$HERE/cme-backup@.timer" /etc/systemd/system/cme-backup@.timer
-echo "d /run/cme 0755 root root -" > /etc/tmpfiles.d/cme.conf
-systemd-tmpfiles --create /etc/tmpfiles.d/cme.conf
+rm -f /etc/tmpfiles.d/cme.conf  # an earlier version made /run/cme root-owned here; the unit owns it now
 systemctl daemon-reload
 systemctl enable "cme@${ORG}" "cme-backup@${ORG}.timer"
 systemctl start "cme-backup@${ORG}.timer"

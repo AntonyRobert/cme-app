@@ -1,5 +1,5 @@
 # One gunicorn per tenant. %i is the org: cme@mcgill selects /etc/cme/mcgill.env,
-# /srv/cme/mcgill and /run/cme/mcgill.sock, and runs as the user cme_mcgill,
+# /srv/cme/mcgill and /run/cme/mcgill/gunicorn.sock, and runs as the user cme_mcgill,
 # which Postgres maps to the app role (no DDL, no UPDATE/DELETE on the audit log).
 [Unit]
 Description=CME rounds app (%i)
@@ -12,10 +12,16 @@ User=cme_%i
 Group=cme_%i
 WorkingDirectory=/srv/cme/%i
 EnvironmentFile=/etc/cme/%i.env
-# The socket is created 0660 cme_%i:cme_%i; caddy is in the group.
+# systemd creates /run/cme/%i owned by cme_%i on every start (and /run/cme
+# itself, root-owned, as the parent). /run is tmpfs, so nothing made by hand
+# would survive a reboot; this does. 0750 with the tenant group: caddy is in
+# that group and can reach the socket, and nobody else can.
+RuntimeDirectory=cme/%i
+RuntimeDirectoryMode=0750
+# The socket itself is created 0660 cme_%i:cme_%i.
 UMask=0007
 ExecStart=/srv/cme/%i/.venv/bin/gunicorn config.wsgi:application \
-    --bind unix:/run/cme/%i.sock \
+    --bind unix:/run/cme/%i/gunicorn.sock \
     --workers 2 \
     --timeout 60 \
     --graceful-timeout 20 \
@@ -31,7 +37,7 @@ RestartSec=3
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/srv/cme/%i/uploads /run/cme
+ReadWritePaths=/srv/cme/%i/uploads
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

@@ -14,7 +14,7 @@ __HOSTNAME__ {
 	# X-Forwarded-For and X-Forwarded-Proto and strips any a client sent, so
 	# the app's audit log records the real client address.
 	handle {
-		reverse_proxy unix//run/cme/__ORG__.sock {
+		reverse_proxy unix//run/cme/__ORG__/gunicorn.sock {
 			header_up X-Forwarded-Proto https
 		}
 	}

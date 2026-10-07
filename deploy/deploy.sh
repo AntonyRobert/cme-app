@@ -64,7 +64,7 @@ systemctl status "cme@${ORG}" --no-pager --lines=5
 
 say "Smoke test over the socket"
 # Admin login page: proves gunicorn, Django and the database all answer.
-code="$(curl -s -o /dev/null -w '%{http_code}' --unix-socket "/run/cme/${ORG}.sock" \
+code="$(curl -s -o /dev/null -w '%{http_code}' --unix-socket "/run/cme/${ORG}/gunicorn.sock" \
   -H "Host: ${DJANGO_ALLOWED_HOSTS%%,*}" -H "X-Forwarded-Proto: https" http://localhost/admin/login/)"
 [[ "$code" == "200" ]] || { echo "expected 200 from /admin/login/, got $code" >&2; exit 1; }
 echo "OK: ${DJANGO_ALLOWED_HOSTS%%,*} answers over the socket."

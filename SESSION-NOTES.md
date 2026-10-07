@@ -215,6 +215,13 @@ listed). Nothing pushed.
   one in place, and on failure the old one is restored (or the new removed) and the
   script exits; after reload the script checks caddy is active. A test renders the
   template and asserts every non-comment line is a brace or a known directive.
+- **The socket directory is systemd's, not tmpfiles'** (your catch: `/run/cme` was root
+  0755, so gunicorn could not create its socket, and `/run` is tmpfs so a hand fix dies at
+  reboot). `RuntimeDirectory=cme/%i` with mode 0750 makes `/run/cme/<org>/` for the
+  tenant user on every start; the socket is `/run/cme/<org>/gunicorn.sock`; caddy, in the
+  tenant group, can reach it. The tmpfiles rule is gone and the script removes a stale
+  one. Per-instance directories also mean one tenant stopping cannot remove another's
+  socket, which a shared `RuntimeDirectory=cme` would have done.
 - **Two OS users per tenant**, not one: `cme_<org>_owner` (migrate, owns the checkout)
   and `cme_<org>` (gunicorn, owns uploads). Peer auth maps each to its role, so the only
   way to run DDL is to be the owner user, and the serving process never is.

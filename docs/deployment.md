@@ -125,7 +125,7 @@ One instance per organisation. `<org>` is a short name such as `mcgill`; today t
 /srv/cme/<org>/uploads/   raw Teams exports and PDFs, owned cme_<org>, never modified
 /srv/cme/<org>/staticfiles collected static files, served by Caddy
 /etc/cme/<org>.env        secrets and settings, mode 600, owned by root
-/run/cme/<org>.sock       gunicorn's Unix socket, 0660, caddy in the group
+/run/cme/<org>/gunicorn.sock  gunicorn's socket; the directory is made by systemd (RuntimeDirectory) for the tenant user, 0750, caddy in the group
 /var/backups/cme/<org>/   nightly pg_dump and uploads tarball, 14 days
 systemd: cme@<org>.service (gunicorn), cme-backup@<org>.timer; cme-cron@<org>.timer (reminders) comes with step 5
 Caddy: /etc/caddy/sites/<org>.caddy, reverse proxy <hostname> -> that socket, /static/ served directly
@@ -184,7 +184,7 @@ cheaper to get right the first time than to rename later.
 
 ### Processes
 
-- One gunicorn per tenant, listening on a **Unix socket** (`/run/cme/<org>.sock`), not a
+- One gunicorn per tenant, listening on a **Unix socket** (`/run/cme/<org>/gunicorn.sock`), not a
   TCP port. A socket has file permissions; a port is reachable by every local process.
 - If a port is ever used instead, bind `127.0.0.1` only. Never `0.0.0.0`.
 - One parameterized systemd template, `cme@.service`. The instance name (`%i`) selects the
