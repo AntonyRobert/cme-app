@@ -205,7 +205,8 @@ a talk runs over, change that session's `end_at` once and everyone's credit foll
 | draft_blurb, published_blurb | text | The draft/published split |
 | submitted_at | timestamptz, nullable | Null means the presenters haven't filled it yet |
 
-Unique on `(event, position)`. A session must fall inside its event and must not overlap
+Unique on `(event, position)`, deferred to commit (as are the presenter and objective
+position constraints) so two rows can swap numbers in one save. A session must fall inside its event and must not overlap
 another session of the same event; sessions are ordered by `start_at`. A typical event is
 three one-hour sessions.
 

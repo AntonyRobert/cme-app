@@ -302,7 +302,12 @@ class Session(UUIDModel):
     class Meta:
         ordering = ["event", "start_at", "position"]
         constraints = [
-            models.UniqueConstraint(fields=["event", "position"], name="session_unique_position"),
+            models.UniqueConstraint(
+                fields=["event", "position"],
+                name="session_unique_position",
+                # Checked at commit, so two rows can swap numbers in one save.
+                deferrable=models.Deferrable.DEFERRED,
+            ),
             models.CheckConstraint(
                 condition=Q(end_at__gt=F("start_at")), name="session_ends_after_start"
             ),
@@ -397,7 +402,10 @@ class SessionPresenter(UUIDModel):
                 fields=["session", "person"], name="sessionpresenter_unique_person"
             ),
             models.UniqueConstraint(
-                fields=["session", "position"], name="sessionpresenter_unique_position"
+                fields=["session", "position"],
+                name="sessionpresenter_unique_position",
+                # Checked at commit, so two rows can swap numbers in one save.
+                deferrable=models.Deferrable.DEFERRED,
             ),
         ]
 
@@ -447,7 +455,10 @@ class LearningObjective(UUIDModel):
         ordering = ["session", "position"]
         constraints = [
             models.UniqueConstraint(
-                fields=["session", "position"], name="learningobjective_unique_position"
+                fields=["session", "position"],
+                name="learningobjective_unique_position",
+                # Checked at commit, so two rows can swap numbers in one save.
+                deferrable=models.Deferrable.DEFERRED,
             ),
         ]
 

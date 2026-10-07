@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 
 from core.models import ImmutableRowError
 from people.tests.factories import make_person, make_staff
@@ -155,12 +155,31 @@ def test_event_cannot_end_before_it_starts():
         event.full_clean()
 
 
+def check_deferred_constraints():
+    """Deferred constraints are checked at commit; force the check now."""
+    with connection.cursor() as cursor:
+        cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+
 def test_session_position_is_unique_within_an_event():
     event = make_event(minutes=120, sessions=0)
     make_session(event, position=1, minutes=60)
     with pytest.raises(IntegrityError), transaction.atomic():
         make_session(event, position=1, minutes=60)
+        check_deferred_constraints()
     make_session(make_event(sessions=0), position=1)
+
+
+def test_positions_can_swap_within_one_transaction():
+    event = make_event(minutes=120, sessions=0)
+    first = make_session(event, position=1, minutes=60)
+    second = make_session(event, position=2, minutes=60)
+    with transaction.atomic():
+        Session.objects.filter(pk=first.pk).update(position=2)
+        Session.objects.filter(pk=second.pk).update(position=1)
+        check_deferred_constraints()
+    first.refresh_from_db()
+    assert first.position == 2
 
 
 # --- Conflict of interest ----------------------------------------------------
