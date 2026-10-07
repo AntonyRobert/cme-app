@@ -208,6 +208,13 @@ listed). Nothing pushed.
   removes the half-made `.git` so the rerun starts clean; an existing checkout is pulled.
   Dry-run locally against a non-empty directory, second run included. `/.ssh/` is now
   gitignored so the key can never be added by accident.
+- **Caddy site file written transactionally.** You asked for validate-after-write; it
+  already was (the template's first line is a `#` comment and validate ran after the
+  sed, on both copies), but a failed validate left the bad file in place for the next
+  reload. Now the previous file is kept, validate runs on the whole config with the new
+  one in place, and on failure the old one is restored (or the new removed) and the
+  script exits; after reload the script checks caddy is active. A test renders the
+  template and asserts every non-comment line is a brace or a known directive.
 - **Two OS users per tenant**, not one: `cme_<org>_owner` (migrate, owns the checkout)
   and `cme_<org>` (gunicorn, owns uploads). Peer auth maps each to its role, so the only
   way to run DDL is to be the owner user, and the serving process never is.

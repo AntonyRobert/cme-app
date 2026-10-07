@@ -242,11 +242,22 @@ if ! grep -q 'import /etc/caddy/sites/\*.caddy' /etc/caddy/Caddyfile 2>/dev/null
 import /etc/caddy/sites/*.caddy
 CADDY
 fi
+# Write the site file, then validate the WHOLE config with it in place. If the
+# template is broken, put back whatever was there before (or nothing) and stop:
+# a failed script beats a Caddy that will not reload.
+SITE="/etc/caddy/sites/${ORG}.caddy"
+[[ -f "$SITE" ]] && cp -p "$SITE" "$SITE.previous"
 sed -e "s|__ORG__|${ORG}|g" -e "s|__HOSTNAME__|${HOSTNAME_FQDN}|g" \
-  "$HERE/site.caddy.template" > "/etc/caddy/sites/${ORG}.caddy"
-caddy validate --config /etc/caddy/Caddyfile
+  "$HERE/site.caddy.template" > "$SITE"
+if ! caddy validate --config /etc/caddy/Caddyfile; then
+  if [[ -f "$SITE.previous" ]]; then mv "$SITE.previous" "$SITE"; else rm -f "$SITE"; fi
+  echo "Caddy rejected the generated config; $SITE was not changed. Fix deploy/site.caddy.template and rerun." >&2
+  exit 1
+fi
+rm -f "$SITE.previous"
 systemctl enable --now caddy
 systemctl reload caddy
+systemctl is-active --quiet caddy || { echo "caddy is not running after reload; see: journalctl -u caddy" >&2; exit 1; }
 
 say "Done. Next:"
 cat <<NEXT

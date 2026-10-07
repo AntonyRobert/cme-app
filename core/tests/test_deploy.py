@@ -83,3 +83,24 @@ def test_grants_sql_revokes_update_and_delete_on_the_audit_log_from_the_app_role
     revoke = next(i for i, l in enumerate(statements) if re.match(r'REVOKE UPDATE, DELETE, TRUNCATE ON TABLE audit_auditlog FROM :"app"', l))
     assert revoke > grant  # the exception is applied after the blanket grant, not before it
     assert "GRANT ALL" not in sql and "CREATE" not in sql  # no DDL rights anywhere for the app role
+
+
+def test_the_caddy_site_template_has_no_bare_lines_caddy_would_read_as_directives():
+    """
+    Every line is a comment, blank, a brace line, or a known directive inside
+    the site block; a bare path or a stray word would be an 'unrecognized
+    directive' and a Caddy that will not reload.
+    """
+    template = (ROOT / "deploy" / "site.caddy.template").read_text(encoding="utf-8")
+    rendered = template.replace("__ORG__", "mcgill").replace("__HOSTNAME__", "cme.mri3.ca")
+    directives = {"encode", "handle_path", "root", "header", "file_server", "handle", "reverse_proxy",
+                  "header_up", "log", "output", "roll_size", "roll_keep"}
+    first_code = next(l for l in rendered.splitlines() if l.strip() and not l.lstrip().startswith("#"))
+    assert first_code == "cme.mri3.ca {"  # the site block opens with the hostname, nothing before it
+    for line in rendered.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped in ("}", "cme.mri3.ca {"):
+            continue
+        assert stripped.split()[0] in directives, f"not a directive: {line!r}"
+    assert "__" not in rendered  # every placeholder substituted
+    assert rendered.count("{") == rendered.count("}")
