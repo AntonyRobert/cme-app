@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Link no longer valid{% endblock %}
+{% block content %}
+<h1>That link is no longer valid</h1>
+<p>Sign-in links work once and expire after 15 minutes. This one has been used, has
+expired, or was not complete when you opened it.</p>
+<p><a class="button" href="{% url 'signin:start' %}">Ask for a new link</a></p>
+{% endblock %}

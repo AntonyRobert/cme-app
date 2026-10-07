@@ -105,3 +105,41 @@ def person_standing(person):
             )
         )
     return standings
+
+
+@dataclass(frozen=True)
+class ProgramStanding:
+    """One person's credit in one program: what the credits page shows per program."""
+
+    program: object
+    standings: list  # EventStanding, by date
+
+    @property
+    def earned_attendance(self):
+        return sum((s.earned_attendance for s in self.standings), ZERO)
+
+    @property
+    def earned_teaching(self):
+        return sum((s.earned_teaching for s in self.standings), ZERO)
+
+    @property
+    def certified_attendance(self):
+        return sum((s.certified_attendance for s in self.standings), ZERO)
+
+    @property
+    def certified_teaching(self):
+        return sum((s.certified_teaching for s in self.standings), ZERO)
+
+
+def person_standing_by_program(person):
+    """
+    [ProgramStanding], one per program the person has anything in, by
+    program name. A total per program, never one number across programs.
+    """
+    by_program = {}
+    for standing in person_standing(person):
+        by_program.setdefault(standing.event.program, []).append(standing)
+    return [
+        ProgramStanding(program=program, standings=standings)
+        for program, standings in sorted(by_program.items(), key=lambda item: item[0].name)
+    ]

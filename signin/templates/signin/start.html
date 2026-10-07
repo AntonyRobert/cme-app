@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<h1>Sign in</h1>
+<p>Enter the email address you use for rounds. We will send you a link that signs you in.
+No password.</p>
+<form method="post">
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+  <label for="id_email">{{ form.email.label }}</label>
+  {{ form.email.errors }}
+  <input type="email" name="email" id="id_email" value="{{ form.email.value|default:'' }}" required autocomplete="email" autofocus>
+  <div><button type="submit" class="primary">Send me a link</button></div>
+</form>
+{% endblock %}

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Signed out{% endblock %}
+{% block content %}
+<h1>Signed out</h1>
+{% if everywhere %}
+<p>You are signed out on every device. Any other browser or phone that was signed in will
+have to use a new link.</p>
+{% else %}
+<p>You are signed out here.</p>
+{% endif %}
+<p><a href="{% url 'signin:start' %}">Sign in again</a></p>
+{% endblock %}

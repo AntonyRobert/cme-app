@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     "credits",
     "certificates",
     "audit",
+    "signin",
 ]
 
 # Staff accounts. Must be set before the first migration and never changed.
@@ -60,6 +61,8 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # Sets request.person for attendee pages (magic-link sessions).
+    "signin.middleware.PersonMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -67,7 +70,7 @@ ROOT_URLCONF = "config.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [

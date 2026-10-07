@@ -84,6 +84,12 @@ class Person(UUIDModel):
         help_text="Only for a staff member who also attends.",
     )
 
+    sessions_revoked_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        editable=False,
+        help_text="Set by sign out everywhere. Sessions signed in before this are dead.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

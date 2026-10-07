@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}My credits{% endblock %}
+{% block content %}
+<h1>{{ person.full_name }}</h1>
+
+{% if to_evaluate %}
+<h2>Evaluations to complete</h2>
+<p>Credit for attending a talk is released when its evaluation is complete.</p>
+<table>
+  <thead><tr><th>Date</th><th>Talk</th><th></th></tr></thead>
+  <tbody>
+  {% for event, session, state in to_evaluate %}
+    <tr>
+      <td>{{ event.date|date:"j M Y" }}</td>
+      <td>{{ session.title }}</td>
+      <td>
+        {% if state == STATE_OPEN or state == STATE_REOPENED %}
+          <span class="muted">Form open{% if state == STATE_REOPENED %} (reopened){% endif %}; the form itself arrives in the next release.</span>
+        {% elif state == STATE_CAN_REQUEST %}
+          <form method="post" action="{% url 'signin:reopen' %}">{% csrf_token %}
+            <input type="hidden" name="session" value="{{ session.pk }}">
+            <button type="submit" class="quiet">Request another week</button>
+          </form>
+        {% elif state == "limit_reached" %}
+          <span class="muted">Reopened as many times as it can be. Ask the program office.</span>
+        {% else %}
+          <span class="muted">The accreditation year has ended. Ask the program office.</span>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% for program in programs %}
+<h2>{{ program.program.name }}</h2>
+<p class="muted">{{ program.program.institution.name }}. Credits are hours attended or presented, at this
+program's rates. Figures marked pending are waiting to be confirmed by the program office;
+nothing is certified until it is.</p>
+<table>
+  <thead>
+    <tr><th>Date</th><th>Rounds</th><th>Attended</th><th>Evaluated</th><th>Rate</th><th>Attendance</th><th>Teaching</th></tr>
+  </thead>
+  <tbody>
+  {% for s in program.standings %}
+    <tr>
+      <td>{{ s.event.date|date:"j M Y" }}</td>
+      <td>{{ s.event.title }}</td>
+      <td>{{ s.breakdown.sessions_attended|length }}/{{ s.breakdown.sessions|length }}{% if s.breakdown.sessions_presented %} (+{{ s.breakdown.sessions_presented|length }} presented){% endif %}</td>
+      <td>{{ s.breakdown.sessions_evaluated|length }}/{{ s.breakdown.sessions|length }}</td>
+      <td>{{ s.breakdown.attendance_rate_per_hour }}/h{% if s.breakdown.sessions_presented %}, {{ s.breakdown.teaching_rate_per_hour }}/h teaching{% endif %}</td>
+      <td>{{ s.earned_attendance }}{% if s.certified_attendance != s.earned_attendance %} <span class="pending">pending</span>{% endif %}</td>
+      <td>{{ s.earned_teaching }}{% if s.certified_teaching != s.earned_teaching %} <span class="pending">pending</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+  <tfoot>
+    <tr><th colspan="5">Total for {{ program.program.name }}</th><th>{{ program.earned_attendance }}</th><th>{{ program.earned_teaching }}</th></tr>
+  </tfoot>
+</table>
+{% empty %}
+<p>No rounds on record for you yet. Attendance appears here after each event's export is
+uploaded and matched to your email address.</p>
+{% endfor %}
+
+<h2>Your account</h2>
+<form method="post" action="{% url 'signin:signout_everywhere' %}">{% csrf_token %}
+  <p>Signed in as {{ person.full_name }}.
+  <button type="submit" class="quiet">Sign out on every device</button></p>
+</form>
+{% endblock %}

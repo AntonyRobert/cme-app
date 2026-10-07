@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Rounds{% endblock %}</title>
+  <style>
+    /* Tokens from docs/design.md. Nothing below hardcodes a colour. */
+    :root {
+      --navy-900: #0B1C3F;
+      --navy-700: #1F3A6E;
+      --link:     #1D4ED8;
+      --accent:   #D4491F;
+      --ink:      #1A1A1A;
+      --ink-mute: #5A5F6A;
+      --rule:     #D8DCE3;
+      --bg:       #FFFFFF;
+      --bg-soft:  #F5F7FA;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Lato, "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    header.masthead { background: var(--navy-900); color: #fff; padding: 12px 16px; }
+    header.masthead a { color: #fff; text-decoration: none; font-weight: 600; }
+    header.masthead nav { float: right; }
+    header.masthead nav form { display: inline; }
+    header.masthead nav button { background: none; border: 0; color: #fff; font: inherit; cursor: pointer; padding: 0; margin-left: 16px; }
+    main { max-width: 70ch; margin: 0 auto; padding: 24px 16px 48px; }
+    h1, h2, h3 { color: var(--navy-700); font-weight: 600; line-height: 1.25; }
+    h1 { font-size: 1.6rem; margin: 0 0 16px; }
+    h2 { font-size: 1.25rem; margin: 32px 0 8px; }
+    a { color: var(--link); }
+    p.muted, .muted { color: var(--ink-mute); }
+    table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; font-size: 15px; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+    th { color: var(--ink-mute); font-weight: 600; font-size: 14px; }
+    tbody tr:nth-child(even) { background: var(--bg-soft); }
+    tfoot th { color: var(--ink); }
+    label { display: block; font-weight: 600; margin: 16px 0 4px; }
+    input[type=text], input[type=email], select {
+      width: 100%; max-width: 32ch; min-height: 44px; padding: 8px 10px; font: inherit;
+      border: 1px solid var(--rule); border-radius: 4px;
+    }
+    .button, button.primary {
+      display: inline-block; min-height: 44px; padding: 10px 20px; margin-top: 16px;
+      background: var(--accent); color: #fff; border: 0; border-radius: 4px;
+      font: inherit; font-weight: 600; cursor: pointer; text-decoration: none;
+    }
+    button.quiet { background: none; border: 1px solid var(--rule); color: var(--link); min-height: 44px; padding: 8px 14px; font: inherit; border-radius: 4px; cursor: pointer; }
+    .notice { background: var(--bg-soft); border-left: 4px solid var(--navy-700); padding: 12px 16px; margin: 16px 0; }
+    .error { background: var(--bg-soft); border-left: 4px solid var(--accent); padding: 12px 16px; margin: 16px 0; }
+    ul.errorlist { color: var(--accent); margin: 4px 0; padding-left: 20px; }
+    .pending { color: var(--ink-mute); }
+    @media (max-width: 640px) { header.masthead nav { float: none; display: block; margin-top: 8px; } }
+  </style>
+</head>
+<body>
+<header class="masthead">
+  <a href="{% url 'signin:me' %}">{% block masthead %}Rounds{% endblock %}</a>
+  <nav>
+    {% if request.person %}
+      <span>{{ request.person.full_name }}</span>
+      <form method="post" action="{% url 'signin:signout' %}">{% csrf_token %}<button type="submit">Sign out</button></form>
+    {% endif %}
+  </nav>
+</header>
+<main>
+  {% if messages %}{% for message in messages %}
+    <div class="{% if message.tags == 'error' %}error{% else %}notice{% endif %}">{{ message }}</div>
+  {% endfor %}{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Your details{% endblock %}
+{% block content %}
+<h1>Welcome</h1>
+<p><strong>{{ email }}</strong> is confirmed. Tell us who you are so your attendance can be
+credited. Your name is printed on your certificate exactly as you type it here.</p>
+<form method="post">
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+  {% for field in form %}
+    <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+    {{ field.errors }}
+    {{ field }}
+  {% endfor %}
+  <div><button type="submit" class="primary">Continue</button></div>
+</form>
+{% endblock %}

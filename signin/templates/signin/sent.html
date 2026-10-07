@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Check your email{% endblock %}
+{% block content %}
+<h1>Check your email</h1>
+<p>If <strong>{{ email }}</strong> is an address we can send to, a sign-in link is on its way.
+It works once, for the next 15 minutes.</p>
+<p class="muted">Nothing arrived? Check your junk folder, then <a href="{% url 'signin:start' %}">ask for another link</a>.</p>
+{% endblock %}
