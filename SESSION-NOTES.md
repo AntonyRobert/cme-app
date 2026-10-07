@@ -68,8 +68,10 @@ Tests you asked for, by name: `test_a_break_between_sessions_does_not_count`,
 
 1. **The hundredths are cut once, on the event total.** Minutes are gathered per
    session and divided by sixty once. Cut downward, so a figure never overstates. Any
-   coarser rounding happens only when the year-end certificate is generated, by a
-   function that does not exist yet; the step and direction are still yours to choose.
+   coarser rounding happens only when the year-end certificate is generated:
+   `certificates.rules.certificate_total` rounds the year's sum to the nearest whole
+   credit, halves up. The lines stay exact, so they will not always add up to the
+   printed total.
 2. **Hours-only manual rows now name a session** (`AttendanceRecord.session`, with a
    check constraint). Minutes without times had to belong somewhere to be credited per
    session. Timed rows leave it blank and are matched by their times. The migration

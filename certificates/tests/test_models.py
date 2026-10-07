@@ -8,6 +8,7 @@ from django.utils import timezone
 from certificates.models import Certificate, CertificateLine
 from certificates.rules import (
     VERIFICATION_ALPHABET,
+    certificate_total,
     certificate_type_for,
     generate_verification_code,
 )
@@ -47,6 +48,32 @@ def line(certificate, event=None, **extra):
     )
     values.update(extra)
     return CertificateLine.objects.create(certificate=certificate, event=event, **values)
+
+
+@pytest.mark.parametrize(
+    "lines, expected",
+    [
+        ([], "0.00"),
+        (["0.98"], "1.00"),
+        (["0.98", "0.98", "0.98"], "3.00"),  # 2.94
+        (["0.33"], "0.00"),
+        (["0.50"], "1.00"),  # halves go up
+        (["1.49"], "1.00"),
+        (["1.50"], "2.00"),
+        (["2.49", "0.02"], "3.00"),  # rounded once, on the sum, not per line
+        (["12.63"], "13.00"),
+        (["12.40"], "12.00"),
+    ],
+)
+def test_certificate_total_rounds_the_years_sum_to_the_nearest_whole_credit(lines, expected):
+    result = certificate_total([Decimal(value) for value in lines])
+    assert result == Decimal(expected)
+    assert result.as_tuple().exponent == -2
+
+
+def test_certificate_total_is_rounded_on_the_sum_not_line_by_line():
+    lines = [Decimal("0.40")] * 5  # 2.00 in total; each line alone would round to 0
+    assert certificate_total(lines) == Decimal("2.00")
 
 
 def test_verification_codes_use_the_unambiguous_alphabet():

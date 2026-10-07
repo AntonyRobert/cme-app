@@ -519,8 +519,9 @@ accrediting body can approve fewer credits than the clock says.
 
 **Rounding happens at issue, not before.** Credit stays exact (to the hundredth) all
 year, in the admin and on the credits page. When the year-end certificate is generated,
-the total is rounded once, by one function in the issuing code. The rule (to what step,
-and which way) is still to be decided; see `decisions.md`.
+the year's exact credits are added up and the total is rounded once, to the nearest whole
+credit, halves up (`certificates.rules.certificate_total`). The lines keep their exact
+figures, so they do not always add up to the printed total; the certificate says so.
 
 Credit is a moving target: a reopened evaluation can earn credit after a certificate was
 issued. That is not an error. The person's admin page shows earned against certified
@@ -552,7 +553,7 @@ because someone will file it with a college.
 | person | FK Person | |
 | certificate_type | enum | cme, attendance. Snapshot of what `role` implied at issue |
 | period_start, period_end | date | The accreditation year |
-| total_credits | decimal | Frozen at issue. Equals the sum of the lines' `credits` |
+| total_credits | decimal | Frozen at issue. The sum of the lines' exact `credits`, rounded to the nearest whole credit (`certificates.rules.certificate_total`) |
 | recipient_name | text | Snapshotted as typed. Names change |
 | recipient_credential | text | Snapshotted |
 | licence_number, licence_jurisdiction | text | Snapshotted, **as entered**, never the normalized form |
