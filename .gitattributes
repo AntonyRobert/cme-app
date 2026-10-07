@@ -13,3 +13,6 @@ Caddyfile   text eol=lf
 *.xlsx  binary
 *.png   binary
 *.jpg   binary
+
+# Windows batch files need CRLF, whatever the checkout setting.
+*.bat       text eol=crlf
