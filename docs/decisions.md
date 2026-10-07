@@ -126,6 +126,15 @@ can be edited for someone who walked in late, with the reason saying so. A roste
 active if the device row is later superseded, but the admin warns on it: if the device's
 times were wrong, so are the copies.
 
+**Conflict of interest is a versioned questionnaire, valid for a year.**
+One answer per question, with an explanation required for every yes. Questions are kept
+in settings by version, and a declaration renders with its own version's wording, so a
+rewording never rewrites history. "No conflicts" is recorded as an explicit no to every
+question, because an accreditor must be able to tell an attested no from a form nobody
+filled in. Validity is a rolling year from the declaration rather than a fixed 30 June:
+a presenter who declares in May should not have to declare again in July. The first
+question set is provisional pending McGill CPD; adding a version is a settings change.
+
 **Hours-only manual rows name a session.**
 A row with minutes but no times has to say which talk the minutes belong to, or they could
 not be credited to one. Timed rows are matched to sessions by their times.

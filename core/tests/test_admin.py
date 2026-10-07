@@ -347,23 +347,44 @@ def test_a_credit_adjustment_records_who_and_why_and_is_then_frozen(client, boss
 
 def test_a_declaration_entered_by_staff_is_logged_and_cannot_be_edited(client, boss, seeded):
     haddad = who("Haddad")
-    response = client.post(
-        url(COIDeclaration, "add"),
-        {
-            "person": haddad.pk,
-            "details": "",
-            "declared_at_0": "2026-10-01",
-            "declared_at_1": "09:00:00",
-            "valid_until": "2027-06-30",
-            "disclosure_text_version": "2026-1",
-        },
-    )
+    form = {
+        "person": haddad.pk,
+        "declared_at_0": "2026-10-01",
+        "declared_at_1": "09:00:00",
+        "disclosure_text_version": "2026-10",
+        "q_equity": "on",  # a yes with no explanation: refused
+    }
+    refused = client.post(url(COIDeclaration, "add"), form)
+    assert refused.status_code == 200
+    assert "q_equity_details" in refused.context["adminform"].form.errors
+
+    form["q_equity_details"] = "Shares in Acme Devices"
+    response = client.post(url(COIDeclaration, "add"), form)
     assert response.status_code == 302, response.context["adminform"].form.errors
     declaration = COIDeclaration.objects.get(person=haddad)
-    assert AuditLog.objects.filter(action="coi.declared", actor_user=boss).exists()
-    client.post(url(COIDeclaration, "change", declaration.pk), {"has_conflict": "on", "details": "x"})
-    declaration.refresh_from_db()
-    assert declaration.has_conflict is False
+    assert declaration.is_complete
+    assert [yes for _, yes, _ in declaration.rendered()] == [False, False, False, True, False, False, False]
+    assert declaration.responses.get(question_key="equity").details == "Shares in Acme Devices"
+    entry = AuditLog.objects.get(action="coi.declared", object_id=str(declaration.pk))
+    assert (entry.actor_user, entry.metadata["entered_by_staff"]) == (boss, True)
+
+    page = client.get(url(COIDeclaration, "change", declaration.pk)).content.decode()
+    assert "Equity or ownership" in page and "Shares in Acme Devices" in page
+    client.post(url(COIDeclaration, "change", declaration.pk), {"q_other": "on", "q_other_details": "x"})
+    assert declaration.responses.get(question_key="other").has_conflict is False
+
+
+def test_nothing_ticked_is_an_explicit_no_to_every_question(client, boss, seeded):
+    roy = who("Roy")
+    response = client.post(
+        url(COIDeclaration, "add"),
+        {"person": roy.pk, "declared_at_0": "2026-10-01", "declared_at_1": "09:00:00",
+         "disclosure_text_version": "2026-10"},
+    )
+    assert response.status_code == 302, response.context["adminform"].form.errors
+    declaration = COIDeclaration.objects.get(person=roy)
+    assert declaration.responses.count() == 7
+    assert declaration.has_conflict is False and declaration.is_complete
 
 
 def test_a_duplicate_licence_is_reported_on_the_form(client, boss, seeded):

@@ -1,3 +1,5 @@
+from django import forms
+from django.conf import settings
 from django.contrib import admin, messages
 from django.db.models import Count, Q
 from django.utils import timezone
@@ -14,6 +16,7 @@ from core.admin import (
     changelist_url,
 )
 
+from .coi import declare
 from .models import (
     DEFAULT_SESSION_LENGTH,
     COIDeclaration,
@@ -21,6 +24,7 @@ from .models import (
     RoundsEvent,
     Session,
     SessionPresenter,
+    coi_questions,
 )
 
 
@@ -195,9 +199,10 @@ class SessionPresenterInline(admin.TabularInline):
         if obj.coi_declaration_id is None:
             return format_html("<strong>{}</strong>", "No declaration on file")
         declaration = obj.coi_declaration
-        answer = "Conflict declared" if declaration.has_conflict else "No conflict"
         return format_html(
-            "{} on {}", admin_link(declaration, answer), timezone.localdate(declaration.declared_at)
+            "{} on {}",
+            admin_link(declaration, declaration.summary.capitalize()),
+            timezone.localdate(declaration.declared_at),
         )
 
 
@@ -304,43 +309,157 @@ class ValidityFilter(admin.SimpleListFilter):
     parameter_name = "valid"
 
     def lookups(self, request, model_admin):
-        return [("yes", "Still valid"), ("no", "Expired")]
+        return [("yes", "In force today"), ("no", "Expired")]
 
     def queryset(self, request, queryset):
         today = timezone.localdate()
         if self.value() == "yes":
-            return queryset.filter(valid_until__gte=today)
+            return queryset.valid_on(today)
         if self.value() == "no":
-            return queryset.filter(valid_until__lt=today)
+            return queryset.exclude(pk__in=queryset.valid_on(today).values("pk"))
         return queryset
+
+
+class COIDeclarationForm(SafeModelForm):
+    """
+    One yes/no and an explanation box per question of the current
+    questionnaire. Leaving every box unticked is an explicit no to each
+    question, which is what gets written.
+    """
+
+    class Meta:
+        model = COIDeclaration
+        fields = ["person", "declared_at", "disclosure_text_version"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["disclosure_text_version"].widget = forms.Select(
+            choices=[(v, v) for v in settings.COI_QUESTIONS]
+        )
+        self.fields["disclosure_text_version"].initial = settings.COI_CURRENT_VERSION
+        self.fields["disclosure_text_version"].help_text = (
+            "The questions below are the current version. Choose another only to "
+            "transcribe a declaration made on an older form."
+        )
+        for key, text in coi_questions(settings.COI_CURRENT_VERSION):
+            self.fields[f"q_{key}"] = forms.BooleanField(required=False, label=text)
+            self.fields[f"q_{key}_details"] = forms.CharField(
+                required=False,
+                label="Details",
+                widget=forms.Textarea(attrs={"rows": 2}),
+                help_text="Required when the answer is yes.",
+            )
+
+    def answers(self):
+        version = self.cleaned_data.get("disclosure_text_version") or settings.COI_CURRENT_VERSION
+        return {
+            key: (
+                bool(self.cleaned_data.get(f"q_{key}")),
+                self.cleaned_data.get(f"q_{key}_details", ""),
+            )
+            for key, _ in coi_questions(version)
+        }
+
+    def clean(self):
+        cleaned = super().clean()
+        version = cleaned.get("disclosure_text_version") or settings.COI_CURRENT_VERSION
+        if version != settings.COI_CURRENT_VERSION:
+            self.add_error(
+                "disclosure_text_version",
+                "Only the current questionnaire can be entered here. Older declarations "
+                "are read-only.",
+            )
+            return cleaned
+        for key, text in coi_questions(version):
+            if cleaned.get(f"q_{key}") and not (cleaned.get(f"q_{key}_details") or "").strip():
+                self.add_error(f"q_{key}_details", f"Explain the conflict for: {text}.")
+        return cleaned
 
 
 @admin.register(COIDeclaration)
 class COIDeclarationAdmin(AppendOnlyAdmin):
-    """Add-only. A change of circumstances is a new declaration."""
+    """
+    Add-only. A change of circumstances is a new declaration. Entering one
+    here is staff acting on the presenter's behalf, and is logged as such.
+    """
 
-    list_display = ["person", "has_conflict", "declared_at", "valid_until", "disclosure_text_version"]
-    list_filter = ["has_conflict", ValidityFilter]
-    search_fields = ["person__family_name", "person__given_name", "details"]
-    autocomplete_fields = ["person"]
-    fields = [
-        "person",
-        "has_conflict",
-        "details",
-        "declared_at",
-        "valid_until",
-        "disclosure_text_version",
+    list_display = ["person", "answers_summary", "declared_at", "valid_to", "disclosure_text_version"]
+    list_filter = [ValidityFilter, "disclosure_text_version"]
+    search_fields = [
+        "person__family_name",
+        "person__given_name",
+        "responses__details",
     ]
+    autocomplete_fields = ["person"]
+    readonly_fields = ["answers", "valid_to"]
+
+    def get_form(self, request, obj=None, **kwargs):
+        if obj is None:
+            kwargs["form"] = COIDeclarationForm
+            # The question fields are added by the form itself; only the
+            # model's own fields go through the form factory.
+            kwargs["fields"] = ["person", "declared_at", "disclosure_text_version"]
+        return super().get_form(request, obj, **kwargs)
+
+    def get_fieldsets(self, request, obj=None):
+        if obj is not None:
+            return [
+                (None, {"fields": ["person", "declared_at", "valid_to", "disclosure_text_version"]}),
+                ("Answers, in the wording of that version", {"fields": ["answers"]}),
+            ]
+        question_fields = []
+        for key, _ in coi_questions(settings.COI_CURRENT_VERSION):
+            question_fields.append((f"q_{key}", f"q_{key}_details"))
+        return [
+            (None, {"fields": ["person", "declared_at", "disclosure_text_version"]}),
+            (
+                "Does the presenter have any of the following? Tick what applies and explain. "
+                "Nothing ticked means no to every question.",
+                {"fields": question_fields},
+            ),
+        ]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("person").prefetch_related("responses")
 
     def save_model(self, request, obj, form, change):
-        super().save_model(request, obj, form, change)
-        record(
-            "coi.declared",
-            obj,
+        if change:
+            return
+        declaration = declare(
+            obj.person,
+            form.answers(),
+            version=form.cleaned_data["disclosure_text_version"],
+            declared_at=form.cleaned_data.get("declared_at"),
+            user=request.user,
             request=request,
-            metadata={
-                "person": str(obj.person_id),
-                "has_conflict": obj.has_conflict,
-                "entered_by_staff": True,
-            },
+        )
+        obj.__dict__.update(declaration.__dict__)
+
+    @admin.display(description="Answers")
+    def answers_summary(self, obj):
+        return obj.summary
+
+    @admin.display(description="Valid to")
+    def valid_to(self, obj):
+        return obj.valid_until if obj.pk else "-"
+
+    @admin.display(description="Answers")
+    def answers(self, obj):
+        if not obj.pk:
+            return "-"
+        rows = format_html_join(
+            "",
+            "<tr><td>{}</td><td><strong>{}</strong></td><td>{}</td></tr>",
+            (
+                (text, "Unanswered" if yes is None else ("Yes" if yes else "No"), details)
+                for text, yes, details in obj.rendered()
+            ),
+        )
+        note = "" if obj.is_complete else " This declaration is incomplete and is not in force."
+        return format_html(
+            "<table><thead><tr><th>Question (version {})</th><th>Answer</th><th>Details</th></tr>"
+            "</thead><tbody>{}</tbody></table>{}",
+            obj.disclosure_text_version,
+            rows,
+            note,
         )

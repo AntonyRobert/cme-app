@@ -24,12 +24,13 @@ from audit.log import record
 from credits.models import CreditAdjustment, EvaluationResponse, EvaluationSubmission
 from credits.windows import request_reopening
 from people.models import AllowedDomain, Person, PersonEmail
+from rounds.coi import declare
 from rounds.models import (
-    COIDeclaration,
     LearningObjective,
     RoundsEvent,
     Session,
     SessionPresenter,
+    coi_questions,
 )
 
 Source = AttendanceRecord.Source
@@ -121,16 +122,12 @@ class Command(BaseCommand):
             LearningObjective.objects.create(session=session, position=order, text=text)
         return session
 
-    def declare(self, person, has_conflict=False, details=""):
-        declaration = COIDeclaration.objects.create(
-            person=person,
-            has_conflict=has_conflict,
-            details=details,
-            declared_at=timezone.now() - datetime.timedelta(days=40),
-            disclosure_text_version="2026-1",
-        )
-        record("coi.declared", declaration, person=person, metadata={"has_conflict": has_conflict})
-        return declaration
+    def declare(self, person, conflicts=None):
+        """A declaration made 40 days ago: no to everything, or yes where `conflicts` says."""
+        answers = {key: (False, "") for key, _ in coi_questions(settings.COI_CURRENT_VERSION)}
+        for key, details in (conflicts or {}).items():
+            answers[key] = (True, details)
+        return declare(person, answers, declared_at=timezone.now() - datetime.timedelta(days=40))
 
     def teams(self, event, upload, name, start, end, person=None, email=None, role="Attendee"):
         """A Teams join from `start` to `end` minutes after noon."""
@@ -233,7 +230,13 @@ class Command(BaseCommand):
         tremblay_dup = p("Marie", "Tremblay", Role.PHYSICIAN, "m.tremblay@example.com", "MD")
 
         # Conflict-of-interest declarations. Haddad has none on file.
-        self.declare(gagnon, True, "Advisory board member, Acme Patient Monitoring (honoraria).")
+        self.declare(
+            gagnon,
+            {
+                "consulting": "Advisory board member, Acme Patient Monitoring.",
+                "speaker_fees": "Honoraria from Acme Patient Monitoring, 2025.",
+            },
+        )
         for presenter in (sharma, cote, okafor):
             self.declare(presenter)
 

@@ -19,7 +19,8 @@ from people.merge import (
     person_links,
 )
 from people.models import Person, PersonEmail
-from rounds.models import COIDeclaration, SessionPresenter
+from rounds.coi import declare_no_conflicts
+from rounds.models import SessionPresenter
 from rounds.tests.factories import make_event, make_session
 
 from .factories import make_person, make_staff
@@ -81,9 +82,7 @@ def test_every_kind_of_row_follows_the_merge(pair, staff):
     first, second = make_session(event), make_session(event)
     attendance = teams_row(event, duplicate, 0, 60)
     evaluation = evaluate(duplicate, first)
-    declaration = COIDeclaration.objects.create(
-        person=duplicate, has_conflict=False, disclosure_text_version="1"
-    )
+    declaration = declare_no_conflicts(duplicate)
     presenting = SessionPresenter.objects.create(session=second, person=duplicate)
     adjustment = adjust(duplicate, event, "0.25")
     certificate = Certificate.objects.create(

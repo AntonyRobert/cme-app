@@ -244,23 +244,55 @@ question per objective from these rows.
 
 ### COIDeclaration
 
+A structured questionnaire, not a single checkbox: one `COIResponse` per question.
+
 | Field | Type | Notes |
 | --- | --- | --- |
 | id | UUID pk | |
 | person | FK Person | |
-| has_conflict | bool | The checkbox |
-| details | text | Required when has_conflict is true (check constraint) |
-| declared_at | timestamptz | |
-| valid_until | date | Default: end of the academic year |
-| disclosure_text_version | text | Which version of the statement was agreed to |
+| declared_at | timestamptz | Valid for a year from this, rolling (`COI_VALIDITY_DAYS`) |
+| disclosure_text_version | text | Which questionnaire was answered. Must exist in `COI_QUESTIONS` |
 
-**Immutable once created.** A new declaration is a new row, and the admin shows existing
-rows as read-only. That's what makes the FK on `SessionPresenter` a snapshot: a year later
-you need to show what was disclosed at that session, not what the presenter has declared
-since.
+### COIResponse
 
-A presenter fills it once and the next session picks up their current declaration
-automatically. If `valid_until` has passed, the form asks again.
+| Field | Type | Notes |
+| --- | --- | --- |
+| id | UUID pk | |
+| declaration | FK COIDeclaration | |
+| question_key | text | Stable across versions, e.g. `consulting` |
+| has_conflict | bool | |
+| details | text | Required when `has_conflict` is true (check constraint) |
+
+Unique on `(declaration, question_key)`.
+
+**The questions live in settings**, in `COI_QUESTIONS`, keyed by version, each item a
+stable `question_key` and its text. `COI_CURRENT_VERSION` names the one new declarations
+use. A declaration always renders with the wording of **its own** version, so rewording a
+question never changes what an old declaration says. To change the questions, add a new
+version; never edit an existing one. The starting set, `2026-10`, is provisional pending
+McGill CPD: research funding or grants; consulting or advisory roles; speaker fees or
+honoraria; equity or ownership; employment; intellectual property or royalties; other
+relevant interests.
+
+**Complete means every question of its version has a response.** "No conflicts in any
+category" writes an explicit no to each question (`rounds.coi.declare_no_conflicts`),
+never leaves them blank, so an unanswered declaration (no responses) and an attested no
+(seven noes) are always distinguishable. `rounds.coi.declare` refuses a missing answer,
+an unknown question or a yes without details, and writes nothing in that case.
+
+**Validity is one year from `declared_at`**, rolling, replacing the earlier fixed 30 June.
+A declaration is in force from the day it was made to the day before its anniversary.
+A presenter picks up their most recent **complete** declaration in force on the event
+date; an expired or incomplete one is never picked up, so they must fill a new one.
+
+**Immutable once created**, declaration and responses alike. A new declaration is a new
+row, and the admin shows existing ones read-only. That's what makes the FK on
+`SessionPresenter` a snapshot: a year later you need to show what was disclosed at that
+session, not what the presenter has declared since.
+
+Existing single-checkbox declarations were converted by migration to version `2026-10`:
+"no conflict" became a no to every question; "conflict" became a yes under "other" with
+the details given, and no to the rest.
 
 ## Attendance
 

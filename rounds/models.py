@@ -34,8 +34,23 @@ def next_position(queryset):
     return (highest or 0) + 1
 
 
+def coi_questions(version):
+    """[(question_key, text)] for a questionnaire version. Raises on an unknown version."""
+    try:
+        return list(settings.COI_QUESTIONS[version])
+    except KeyError:
+        raise LookupError(f"No conflict-of-interest questionnaire version {version!r}.")
+
+
+def coi_validity():
+    return datetime.timedelta(days=settings.COI_VALIDITY_DAYS)
+
+
 def end_of_academic_year(today=None):
-    """The next 30 June, the default expiry of a conflict-of-interest declaration."""
+    """
+    The next 30 June. No longer used by any model: migration 0001 refers to
+    it as the old default of a removed field, so it has to keep existing.
+    """
     today = today or timezone.localdate()
     year = today.year if (today.month, today.day) <= (6, 30) else today.year + 1
     return datetime.date(year, 6, 30)
@@ -118,31 +133,42 @@ class RoundsEvent(UUIDModel):
 
 
 class COIDeclarationQuerySet(PersonOwnedQuerySet):
-    def current_for(self, person, on_date):
-        """The person's most recent declaration still valid on on_date, or None."""
-        return (
-            self.for_person(person)
-            .filter(valid_until__gte=on_date)
-            .order_by("-declared_at")
-            .first()
+    def valid_on(self, on_date):
+        """Declarations in force on a date: made on or before it, less than a year earlier."""
+        day_after = datetime.datetime.combine(
+            on_date + datetime.timedelta(days=1), datetime.time.min, tzinfo=datetime.timezone.utc
         )
+        return self.filter(declared_at__lt=day_after, declared_at__gte=day_after - coi_validity())
+
+    def current_for(self, person, on_date):
+        """
+        The person's most recent complete declaration in force on on_date, or
+        None. An expired or unfinished declaration is never picked up.
+        """
+        for declaration in (
+            self.for_person(person).valid_on(on_date).prefetch_related("responses").order_by("-declared_at")
+        ):
+            if declaration.is_complete:
+                return declaration
+        return None
 
 
 class COIDeclaration(AppendOnlyMixin, UUIDModel):
     """
-    A conflict-of-interest declaration, as made.
+    A conflict-of-interest declaration, as made: one COIResponse per
+    question of its questionnaire version.
 
     Never edited: a change of circumstances is a new declaration. That is
-    what lets SessionPresenter point at one as a snapshot.
+    what lets SessionPresenter point at one as a snapshot. Valid for a
+    year from declared_at, rolling. Write one with rounds.coi.declare().
     """
 
     person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="coi_declarations")
-    has_conflict = models.BooleanField()
-    details = models.TextField(blank=True, help_text="Required when there is a conflict.")
     declared_at = models.DateTimeField(default=timezone.now)
-    valid_until = models.DateField(default=end_of_academic_year)
     disclosure_text_version = models.CharField(
-        max_length=50, help_text="Which version of the statement was agreed to."
+        max_length=50,
+        help_text="Which questionnaire was answered. The declaration always shows that "
+        "version's wording.",
     )
 
     objects = COIDeclarationQuerySet.as_manager()
@@ -150,21 +176,99 @@ class COIDeclaration(AppendOnlyMixin, UUIDModel):
     class Meta:
         verbose_name = "COI declaration"
         ordering = ["-declared_at"]
+
+    def __str__(self):
+        return f"{self.person}: {self.summary} ({timezone.localdate(self.declared_at)})"
+
+    @property
+    def valid_until(self):
+        """The last day this declaration is in force."""
+        return timezone.localdate(self.declared_at + coi_validity()) - datetime.timedelta(days=1)
+
+    def is_valid_on(self, on_date):
+        return timezone.localdate(self.declared_at) <= on_date <= self.valid_until
+
+    @property
+    def questions(self):
+        return coi_questions(self.disclosure_text_version)
+
+    @property
+    def is_complete(self):
+        """Every question of its version has an answer. Unanswered is not "no"."""
+        answered = {r.question_key for r in self.responses.all()}
+        return answered >= {key for key, _ in self.questions}
+
+    @property
+    def has_conflict(self):
+        return any(r.has_conflict for r in self.responses.all())
+
+    @property
+    def summary(self):
+        if not self.is_complete:
+            return "incomplete"
+        declared = [r for r in self.responses.all() if r.has_conflict]
+        return f"{len(declared)} conflict(s) declared" if declared else "no conflicts"
+
+    def rendered(self):
+        """
+        [(question text, has_conflict or None, details)] in question order,
+        using the wording of this declaration's own version. None means
+        unanswered.
+        """
+        answers = {r.question_key: r for r in self.responses.all()}
+        rows = []
+        for key, text in self.questions:
+            response = answers.get(key)
+            if response is None:
+                rows.append((text, None, ""))
+            else:
+                rows.append((text, response.has_conflict, response.details))
+        return rows
+
+    def clean(self):
+        super().clean()
+        try:
+            coi_questions(self.disclosure_text_version)
+        except LookupError as error:
+            raise ValidationError({"disclosure_text_version": str(error)})
+
+
+class COIResponse(AppendOnlyMixin, UUIDModel):
+    """One answer on a declaration. A yes needs an explanation."""
+
+    declaration = models.ForeignKey(
+        COIDeclaration, on_delete=models.CASCADE, related_name="responses"
+    )
+    question_key = models.CharField(max_length=50)
+    has_conflict = models.BooleanField()
+    details = models.TextField(blank=True, help_text="Required when the answer is yes.")
+
+    class Meta:
+        verbose_name = "COI response"
+        ordering = ["declaration", "question_key"]
         constraints = [
+            models.UniqueConstraint(
+                fields=["declaration", "question_key"], name="coiresponse_one_per_question"
+            ),
             models.CheckConstraint(
                 condition=Q(has_conflict=False) | ~Q(details=""),
-                name="coideclaration_conflict_needs_details",
+                name="coiresponse_yes_needs_details",
             ),
         ]
 
     def __str__(self):
-        answer = "conflict declared" if self.has_conflict else "no conflict"
-        return f"{self.person}: {answer} ({timezone.localdate(self.declared_at)})"
+        return f"{self.question_key}: {'yes' if self.has_conflict else 'no'}"
 
     def clean(self):
         super().clean()
         if self.has_conflict and not (self.details or "").strip():
-            raise ValidationError({"details": "Describe the conflict."})
+            raise ValidationError({"details": "Explain the conflict."})
+        if self.declaration_id:
+            keys = {key for key, _ in self.declaration.questions}
+            if self.question_key not in keys:
+                raise ValidationError(
+                    {"question_key": f"Not a question of version {self.declaration.disclosure_text_version}."}
+                )
 
 
 class Session(UUIDModel):

@@ -6,29 +6,22 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
 from core.models import ImmutableRowError
-from people.tests.factories import make_person
+from people.tests.factories import make_person, make_staff
+from audit.models import AuditLog
+from rounds.coi import declare, declare_no_conflicts
 from rounds.models import (
     COIDeclaration,
+    COIResponse,
     LearningObjective,
     RoundsEvent,
     Session,
     SessionPresenter,
-    end_of_academic_year,
+    coi_questions,
 )
 
 from .factories import at, make_event, make_session
 
 pytestmark = pytest.mark.django_db
-
-
-def declare(person, has_conflict=False, details="", **extra):
-    return COIDeclaration.objects.create(
-        person=person,
-        has_conflict=has_conflict,
-        details=details,
-        disclosure_text_version="2026-1",
-        **extra,
-    )
 
 
 # --- Events ------------------------------------------------------------------
@@ -172,59 +165,193 @@ def test_session_position_is_unique_within_an_event():
 
 # --- Conflict of interest ----------------------------------------------------
 
-
-@pytest.mark.parametrize(
-    "today, expected",
-    [
-        (datetime.date(2026, 10, 6), datetime.date(2027, 6, 30)),
-        (datetime.date(2027, 6, 30), datetime.date(2027, 6, 30)),
-        (datetime.date(2027, 7, 1), datetime.date(2028, 6, 30)),
-        (datetime.date(2027, 1, 15), datetime.date(2027, 6, 30)),
-    ],
-)
-def test_end_of_academic_year(today, expected):
-    assert end_of_academic_year(today) == expected
+NOW = datetime.datetime(2026, 10, 6, 15, 0, tzinfo=datetime.timezone.utc)
 
 
-def test_a_conflict_needs_details():
+def declare_none(person, **kwargs):
+    kwargs.setdefault("declared_at", NOW)
+    return declare_no_conflicts(person, **kwargs)
+
+
+def declare_some(person, **kwargs):
+    answers = {key: (False, "") for key, _ in coi_questions("2026-10")}
+    answers["consulting"] = (True, "Advisory board, Acme Devices")
+    kwargs.setdefault("declared_at", NOW)
+    return declare(person, answers, **kwargs)
+
+
+def test_no_conflicts_writes_an_explicit_no_to_every_question():
+    declaration = declare_none(make_person())
+    assert declaration.is_complete
+    assert declaration.has_conflict is False
+    assert declaration.summary == "no conflicts"
+    assert [yes for _, yes, _ in declaration.rendered()] == [False] * 7
+    assert declaration.responses.count() == 7
+
+
+def test_an_unanswered_declaration_is_not_an_attested_no():
+    blank = COIDeclaration.objects.create(person=make_person(), disclosure_text_version="2026-10")
+    assert blank.responses.count() == 0
+    assert blank.is_complete is False
+    assert blank.summary == "incomplete"
+    assert [yes for _, yes, _ in blank.rendered()] == [None] * 7
+
+
+def test_an_incomplete_declaration_is_rejected():
     person = make_person()
+    answers = {key: (False, "") for key, _ in coi_questions("2026-10")}
+    del answers["employment"]
+    with pytest.raises(ValidationError) as err:
+        declare(person, answers)
+    assert "employment" in err.value.message_dict
+    assert COIDeclaration.objects.filter(person=person).count() == 0  # nothing half-written
+
+
+def test_an_answer_to_an_unknown_question_is_rejected():
+    person = make_person()
+    answers = {key: (False, "") for key, _ in coi_questions("2026-10")}
+    answers["lottery_wins"] = (False, "")
+    with pytest.raises(ValidationError) as err:
+        declare(person, answers)
+    assert "lottery_wins" in err.value.message_dict
+
+
+def test_a_yes_without_details_is_rejected():
+    person = make_person()
+    answers = {key: (False, "") for key, _ in coi_questions("2026-10")}
+    answers["speaker_fees"] = (True, "   ")
+    with pytest.raises(ValidationError) as err:
+        declare(person, answers)
+    assert "speaker_fees" in err.value.message_dict
     with pytest.raises(IntegrityError), transaction.atomic():
-        declare(person, has_conflict=True, details="")
-    declare(person, has_conflict=True, details="Consultant for Acme Devices")
+        COIResponse.objects.create(
+            declaration=declare_none(person), question_key="speaker_fees", has_conflict=True, details=""
+        )
+
+
+def test_a_yes_with_details_is_recorded_and_summarised():
+    declaration = declare_some(make_person())
+    assert declaration.has_conflict is True
+    assert declaration.summary == "1 conflict(s) declared"
+    assert ("Consulting or advisory roles", True, "Advisory board, Acme Devices") in declaration.rendered()
+
+
+def test_an_old_declaration_renders_with_its_own_versions_wording(settings):
+    settings.COI_QUESTIONS = {
+        **settings.COI_QUESTIONS,
+        "2027-01": [
+            ("research_funding", "Grants, including in kind"),  # reworded
+            ("consulting", "Consulting or advisory roles"),
+            ("speaker_fees", "Speaker fees or honoraria"),
+            ("equity", "Equity or ownership"),
+            ("employment", "Employment"),
+            ("intellectual_property", "Intellectual property or royalties"),
+            ("other", "Other relevant interests"),
+            ("gifts", "Gifts or hospitality"),  # new question
+        ],
+    }
+    settings.COI_CURRENT_VERSION = "2027-01"
+    old = declare_none(make_person(), version="2026-10")
+    new = declare_no_conflicts(make_person())
+    assert [text for text, _, _ in old.rendered()][0] == "Research funding or grants"
+    assert len(old.rendered()) == 7
+    assert old.is_complete  # judged against its own version, not the current one
+    assert [text for text, _, _ in new.rendered()][0] == "Grants, including in kind"
+    assert len(new.rendered()) == 8
+    assert new.disclosure_text_version == "2027-01"
+
+
+def test_a_declaration_under_an_unknown_version_is_refused():
+    with pytest.raises(LookupError):
+        declare_no_conflicts(make_person(), version="1999-01")
+    stray = COIDeclaration(person=make_person(), disclosure_text_version="1999-01")
+    with pytest.raises(ValidationError):
+        stray.full_clean()
+
+
+def test_a_declaration_is_logged_against_the_person_or_the_staff_member():
+    person = make_person()
+    declare_none(person)
+    entry = AuditLog.objects.filter(action="coi.declared").latest("id")
+    assert (entry.actor_person, entry.metadata["entered_by_staff"]) == (person, False)
+    staff = make_staff()
+    declare_some(person, user=staff)
+    entry = AuditLog.objects.filter(action="coi.declared").latest("id")
+    assert (entry.actor_user, entry.metadata["conflicts"]) == (staff, ["consulting"])
 
 
 def test_a_declaration_cannot_be_edited_or_deleted():
-    declaration = declare(make_person())
-    declaration.has_conflict = True
-    declaration.details = "changed my mind"
+    declaration = declare_none(make_person())
+    declaration.disclosure_text_version = "2027-01"
     with pytest.raises(ImmutableRowError):
         declaration.save()
     with pytest.raises(ImmutableRowError):
         declaration.delete()
+    response = declaration.responses.first()
+    response.has_conflict = True
+    response.details = "changed my mind"
+    with pytest.raises(ImmutableRowError):
+        response.save()
+
+
+# --- Validity: a year from declared_at, rolling -------------------------------
+
+
+def test_a_declaration_is_valid_for_a_year_from_when_it_was_made():
+    declaration = declare_none(make_person(), declared_at=NOW)  # 2026-10-06
+    assert declaration.valid_until == datetime.date(2027, 10, 5)
+    assert declaration.is_valid_on(datetime.date(2026, 10, 6))
+    assert declaration.is_valid_on(datetime.date(2027, 10, 5))
+    assert not declaration.is_valid_on(datetime.date(2027, 10, 6))
+    assert not declaration.is_valid_on(datetime.date(2026, 10, 5))  # not before it was made
 
 
 def test_presenter_picks_up_their_current_declaration():
     person = make_person()
-    declare(person, valid_until=datetime.date(2025, 6, 30))  # expired
-    current = declare(person, valid_until=datetime.date(2027, 6, 30))
-    declare(make_person(), valid_until=datetime.date(2027, 6, 30))  # someone else's
-    session = make_session(make_event())
-    link = SessionPresenter.objects.create(session=session, person=person)
+    event = make_event()  # 2026-09-15
+    expired = declare_none(person, declared_at=NOW - datetime.timedelta(days=400))
+    current = declare_none(person, declared_at=NOW - datetime.timedelta(days=30))
+    declare_none(make_person(), declared_at=NOW)  # someone else's
+    link = SessionPresenter.objects.create(session=event.sessions.get(), person=person)
     assert link.coi_declaration == current
+    assert link.coi_declaration != expired
 
 
-def test_presenter_without_a_valid_declaration_is_left_blank():
+def test_an_expired_declaration_is_not_picked_up():
+    """A presenter whose declaration has lapsed must fill a new one."""
     person = make_person()
-    declare(person, valid_until=datetime.date(2025, 6, 30))
-    link = SessionPresenter.objects.create(session=make_session(make_event()), person=person)
+    event = make_event()  # 2026-09-15
+    declare_none(person, declared_at=NOW - datetime.timedelta(days=366 + 21))  # 2025-09-14
+    link = SessionPresenter.objects.create(session=event.sessions.get(), person=person)
     assert link.coi_declaration is None
+    assert COIDeclaration.objects.current_for(person, datetime.date(2026, 9, 15)) is None
+    # The day before it lapsed it still counted.
+    assert COIDeclaration.objects.current_for(person, datetime.date(2026, 9, 13)) is not None
+
+
+def test_a_declaration_made_after_the_event_is_not_picked_up_for_it():
+    person = make_person()
+    event = make_event()  # 2026-09-15
+    declare_none(person, declared_at=NOW)  # 2026-10-06
+    assert COIDeclaration.objects.current_for(person, event.date) is None
+
+
+def test_an_incomplete_declaration_is_not_picked_up():
+    person = make_person()
+    event = make_event()
+    COIDeclaration.objects.create(
+        person=person, disclosure_text_version="2026-10", declared_at=NOW - datetime.timedelta(days=30)
+    )
+    assert COIDeclaration.objects.current_for(person, event.date) is None
+    complete = declare_none(person, declared_at=NOW - datetime.timedelta(days=60))
+    assert COIDeclaration.objects.current_for(person, event.date) == complete
 
 
 def test_a_later_declaration_does_not_replace_the_snapshot():
     person = make_person()
-    original = declare(person, valid_until=datetime.date(2027, 6, 30))
-    link = SessionPresenter.objects.create(session=make_session(make_event()), person=person)
-    declare(person, has_conflict=True, details="New grant", valid_until=datetime.date(2027, 6, 30))
+    original = declare_none(person, declared_at=NOW - datetime.timedelta(days=30))
+    link = SessionPresenter.objects.create(session=make_event().sessions.get(), person=person)
+    declare_some(person, declared_at=NOW)
     link.position = 2
     link.save()
     link.refresh_from_db()
@@ -232,9 +359,9 @@ def test_a_later_declaration_does_not_replace_the_snapshot():
 
 
 def test_presenter_cannot_carry_someone_elses_declaration():
-    theirs = declare(make_person())
+    theirs = declare_none(make_person())
     link = SessionPresenter(
-        session=make_session(make_event()), person=make_person(), coi_declaration=theirs
+        session=make_event().sessions.get(), person=make_person(), coi_declaration=theirs
     )
     with pytest.raises(ValidationError):
         link.full_clean()

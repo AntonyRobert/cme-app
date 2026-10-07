@@ -130,6 +130,27 @@ UPLOAD_ROOT = Path(env("UPLOAD_ROOT", str(BASE_DIR / "uploads"))).resolve()
 # Default title for a RoundsEvent. Prints on certificate lines.
 SERIES_NAME = "Health Informatics Rounds"
 
+# Conflict-of-interest questionnaire, by version. A declaration records the
+# version it was made under and always renders with that version's wording, so
+# rewording a question never changes what an old declaration says. To change
+# the questions, add a new version and point COI_CURRENT_VERSION at it; never
+# edit an existing one. question_key is stable across versions.
+# The 2026-10 set is provisional, pending confirmation with McGill CPD.
+COI_QUESTIONS = {
+    "2026-10": [
+        ("research_funding", "Research funding or grants"),
+        ("consulting", "Consulting or advisory roles"),
+        ("speaker_fees", "Speaker fees or honoraria"),
+        ("equity", "Equity or ownership"),
+        ("employment", "Employment"),
+        ("intellectual_property", "Intellectual property or royalties"),
+        ("other", "Other relevant interests"),
+    ],
+}
+COI_CURRENT_VERSION = "2026-10"
+# A declaration is valid for this long after it was made, rolling.
+COI_VALIDITY_DAYS = 365
+
 # The evaluation form is open this many days after the event date, and a
 # reopening lasts this long again.
 EVALUATION_WINDOW_DAYS = 7
