@@ -47,6 +47,87 @@ log into the admin are `User`.
   wrote it; matching lowercases at compare time.
 - `created_by`, `uploaded_by`, `matched_by`, `decided_by` are FKs to the staff `User`.
 
+## Institution and Program
+
+Two levels above everything else. An **institution** is a deployment: McGill is one
+instance, Concordia another, and their records never share a database (see
+`deployment.md`). A **program** is a row inside an instance: Emergency Medicine, Internal
+Medicine, General Surgery. Every event belongs to a program, every certificate is issued
+by one, and staff are scoped to one or more of them.
+
+### Institution
+
+One row per instance in practice; a table rather than a setting so the name and identity
+are data, and so the public directory (`decisions.md`) has something to push.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| id | UUID pk | |
+| name | text | "McGill University" |
+| short_name | text, unique | "mcgill". The `<org>` of the hostname and the deploy script |
+| website | text, optional | |
+
+### Program
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| id | UUID pk | |
+| institution | FK Institution | |
+| name | text | "Emergency Medicine" |
+| slug | text, unique within institution | For URLs |
+| series_name | text | Default title of a new event. Was the `SERIES_NAME` setting |
+| attendance_rate_per_hour | decimal | Credits per hour attended. Default 1.00 |
+| teaching_rate_per_hour | decimal | Credits per hour presented. Default 1.00 |
+| default_accredited_credits | decimal | Pre-filled on a new event. Multiple of 0.25 |
+| accreditation_year_end_month, accreditation_year_end_day | smallint | Was the `ACCREDITATION_YEAR_END` setting |
+| coi_question_version | text | Which `COI_QUESTIONS` version new declarations use. Was `COI_CURRENT_VERSION` |
+| retention_years | smallint | How long records are kept after the accreditation year. Policy still open; the field is where the answer goes |
+| is_active | bool | A retired program keeps its history and takes no new events |
+
+Everything that used to be a per-deployment setting and differs between programs lives
+here. The settings keep their values only as defaults for a newly created program. A
+program's admin can edit its own row; nobody else can.
+
+**Rates are read at issue and snapshotted onto the certificate line** (below). Changing
+a rate in March changes nothing already issued and does not revalue last year's sessions
+on next year's certificate. The credits page shows the rate per event so a mid-year change
+does not look like a bug.
+
+### Staff scope: ProgramRole
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| id | UUID pk | |
+| user | FK User | |
+| program | FK Program | |
+| role | enum | coordinator, program_admin, read_only |
+| granted_by, granted_at | FK User, timestamptz | |
+
+Unique on `(user, program)`. A user may hold different roles in different programs: a
+coordinator in Emergency Medicine and read-only in Internal Medicine.
+
+The three Django groups stay as the **permission templates** (what a coordinator may do,
+model by model) and are synced to a user from the roles they hold anywhere, so Django's
+own model-level checks keep working. **Which rows** they may do it to is the program
+scope, enforced by `core/authz.py`:
+
+- `request.programs` is the set of programs the signed-in staff member has a role in.
+  Superusers have every program.
+- Every program-owned model (event, session, upload, attendance row, evaluation, window,
+  adjustment, certificate, decision) has `for_programs(programs)` on its manager, the way
+  person-owned models have `for_person()`. The lookup path to the program is declared on
+  the queryset (`event__program`, `session__event__program`, ...).
+- Every admin changelist, change form, autocomplete and action filters through it, so an
+  Emergency Medicine coordinator never sees Internal Medicine's match queue, and a URL
+  with another program's id is a 404, not a 403.
+- The URL-walking test (`core/tests/test_authz.py`) is extended: a staff route that takes
+  an id must declare how it is scoped to a program, as an attendee route must declare how
+  it is scoped to a person. The admin is covered by a separate test that walks every
+  registered model and asserts program-owned ones are filtered.
+
+Persons, emails, allowed domains and audit entries are instance-wide, not per program: a
+physician who attends two programs is one person.
+
 ## Staff accounts
 
 ### User (`accounts.User`)
@@ -55,7 +136,7 @@ A custom user model subclassing Django's `AbstractUser`, with no extra fields ye
 exists because Django cannot switch to a custom user model after the first migration.
 
 Only the handful of staff who log into the admin have one. TOTP will sit here later
-without touching attendees.
+without touching attendees. What a staff member may see is decided by `ProgramRole`.
 
 ## People and identity
 
@@ -177,13 +258,19 @@ flyer renders an event, the evaluation form targets a session.
 | Field | Type | Notes |
 | --- | --- | --- |
 | id | UUID pk | |
-| title | text | Defaults to the `SERIES_NAME` setting. Prints on certificate lines |
+| program | FK Program | The program this rounds belongs to. Decides the rates, the series name and whose certificate it ends up on |
+| title | text | Defaults to the program's `series_name`. Prints on certificate lines |
 | date | date | |
 | start_at, end_at | timestamptz | The outer bounds. Every session falls inside them. A blank end is three hours after the start; a blank `date` is the start's day |
 | teams_join_url | text | The link pasted in the invite |
 | teams_meeting_title | text | The meeting title exactly as Teams shows it. An export is matched to an event on this plus the date; exports carry no meeting ID |
 | status | enum | draft, published, held, closed |
-| accredited_credits | decimal | Credits available for the whole event. Must be a multiple of 0.25 |
+| accredited_credits | decimal | The accreditor-set ceiling on attendance credit for the event. Pre-filled from the program's default. Must be a multiple of 0.25: it is a ceiling someone approved, not a computed figure |
+
+Everything that will one day be pushed to the public directory (`decisions.md`) is
+already on this table and its sessions: title, date, times, objectives, presenter names
+and affiliations, join link, program, institution. Keep it that way: no event field should
+need a join through a person's private data to publish.
 
 The flyer page shows published events, the evaluation form opens on held, and closed stops
 further submissions so December totals stop moving. **Closed is final.** A closed event
@@ -267,8 +354,8 @@ A structured questionnaire, not a single checkbox: one `COIResponse` per questio
 Unique on `(declaration, question_key)`.
 
 **The questions live in settings**, in `COI_QUESTIONS`, keyed by version, each item a
-stable `question_key` and its text. `COI_CURRENT_VERSION` names the one new declarations
-use. A declaration always renders with the wording of **its own** version, so rewording a
+stable `question_key` and its text. The program's `coi_question_version` names the one
+its new declarations use. A declaration always renders with the wording of **its own** version, so rewording a
 question never changes what an old declaration says. To change the questions, add a new
 version; never edit an existing one. The starting set, `2026-10`, is provisional pending
 McGill CPD: research funding or grants; consulting or advisory roles; speaker fees or
@@ -327,11 +414,11 @@ the old rows, and the matches pointing at them, on a re-parse is **not yet desig
 | Field | Type | Notes |
 | --- | --- | --- |
 | id | UUID pk | |
-| source | enum | teams_upload, manual, room_roster |
-| upload | FK AttendanceUpload, nullable | Null for anything entered by hand |
+| source | enum | teams_upload, signin_sheet, qr_signin, manual, room_roster |
+| upload | FK AttendanceUpload, nullable | The Teams export or sign-in sheet the row came from. Null for QR and hand-entered rows |
 | parser_version | text, nullable | Null for anything entered by hand |
 | event | FK RoundsEvent | Denormalized for query speed |
-| session | FK Session, nullable | Hours-only rows only: which session the minutes belong to. Check constraint: a row without times must have one, and vice versa |
+| session | FK Session, nullable | Which session a row without times belongs to: hours-only manual rows, sign-in sheet ticks and QR scans. Check constraint: a row without times must have one, and vice versa |
 | raw_display_name | text, nullable | Exactly as Teams wrote it |
 | raw_email | text, nullable | Exactly as Teams wrote it. Sometimes a UPN, sometimes nothing |
 | raw_participant_role | text, nullable | **A Teams meeting permission**, as written. Labelled "Teams meeting role" in the admin. Everyone is given Presenter so they can share a screen; it says nothing about who presented and nothing in the credit path reads it |
@@ -373,7 +460,32 @@ one. And one correction can replace many rows: four 15-minute rejoin rows replac
 The active-row query would then drop the original and count **both** corrections,
 inflating the credit. Also checked: `old != new`, and both rows share an `event`.
 
-### Parser notes
+### Three sources, reconciled
+
+A Teams export, an uploaded sign-in sheet and a QR scan are three **independent claims**
+about the same person in the same session. Each under-reports differently: Teams misses
+the person physically in the room, a QR scan misses someone who left early, a paper sheet
+proves presence but not duration. They are **never merged arithmetically**. Someone who
+appears in all three shows three rows and one proposed figure, not the sum.
+
+| Source | What one row claims | Minutes it claims for a session |
+| --- | --- | --- |
+| `teams_upload` | One join, with times | The part of its interval inside the session |
+| `signin_sheet` | A tick against a session on paper | The whole session |
+| `qr_signin` | One scan, in the room, during the session | The whole session |
+| `manual` | What staff entered, with times or minutes | As entered |
+| `room_roster` | Sat behind a device for the device's window | The part of the copied interval inside the session |
+
+**Proposed minutes per session = the highest claim among the sources, capped at the
+session's length.** Highest, because every source under-reports; capped, because no source
+can exceed the talk. Within one source, rows still combine the way they always did (the
+union of a person's Teams intervals). Sources disagreeing by more than a few minutes are
+flagged for a human; sources agreeing are signed off in bulk (see sign-off below).
+
+All sources are `AttendanceRecord` rows with distinct `source` values, so supersession,
+matching and the review queue work unchanged.
+
+### Parser notes (Teams)
 
 What the file actually is, from a real export (the anonymized copy is
 `attendance/tests/fixtures/teams-export-2026-09-10.csv`; `attendance/teams.py` reads it):
@@ -401,10 +513,55 @@ What the file actually is, from a real export (the anonymized copy is
   Email capitalization varies between rows; matching lowercases. Section 4 has quoted
   fields with doubled quotes inside. Engagement columns are often empty.
 - **The Role column is a meeting permission**, not a statement about who presented, and
-  cannot be changed on the Teams side. It is stored as observed and never read.
+  cannot be changed on the Teams side. It is stored as observed and never read. The
+  organizer and every participant are attendees; presenter hours come only from
+  `SessionPresenter`.
 
-Nothing is stored until the file has been parsed and checked against the event; a wrong
-file leaves no row and no file behind. Re-parsing a stored upload is still undesigned.
+### The sign-in sheet
+
+For people attending in person who did not scan. Exported per event as a spreadsheet:
+one row per known person of the program (name, credential, affiliation), one column per
+session to tick, and blank rows at the bottom for walk-ins. Whoever transcribes the paper
+ticks boxes rather than typing names, which keeps spelling variants out of the match
+queue.
+
+A hidden column carries each row's person id, and a hidden cell carries the event id with
+a signature over it (`HMAC(SECRET_KEY, event id)`), so the upload is matched on ids, never
+on names, and a sheet exported for one event is refused for another. A tick becomes an
+`AttendanceRecord` with `source = signin_sheet`, the session, and a claim of the whole
+session. Walk-in rows (name, no id) land in the review queue like any unmatched row.
+
+### QR sign-in
+
+For people attending in person. The room shows a QR code that **rotates every thirty
+seconds**: the URL carries the session id and a time-windowed token
+(`HMAC(SECRET_KEY, session id, window)`), valid for the current window and the one before.
+A photographed code texted to someone at home stops working within a minute. The page it
+opens requires sign-in, so the scan is tied to a `Person`, never to a typed name.
+
+**One scan per session, credited as the whole session.** Not scan-in/scan-out: people
+forget to scan out, and the orphan check-ins are a worse reconciliation problem than the
+one being solved. A scan becomes an `AttendanceRecord` with `source = qr_signin` and the
+session; a second scan of the same session by the same person is ignored (unique on
+`(person, session)` where `source = qr_signin`). The sign-off step catches bad claims.
+
+### Upload preview: nothing is stored until confirmed
+
+Every import, Teams export, sign-in sheet or QR batch, shows what the system understood
+before it commits:
+
+- which event matched, and for a Teams export which date reading was chosen and why;
+- every participant, matched or not, their proposed minutes per session, and which
+  sessions they cross;
+- the rule being applied, stated on the screen: the organizer and all participants are
+  attendees; presenter hours come only from `SessionPresenter`;
+- the rows worth looking at, flagged: sources disagreeing by more than a few minutes,
+  names matching nobody, a Section 2 checksum that will not reconcile.
+
+Until the reviewer confirms, the file sits in `UPLOAD_ROOT/pending/` under its hash with
+no database row; pending files older than a day are removed. Confirming stores the file,
+creates the `AttendanceUpload` and its rows, and audit-logs the import. Cancelling removes
+the pending file. A re-upload of a file already stored is refused as before.
 
 Matching runs email first against `PersonEmail`, lowercasing `raw_email` at compare time.
 What falls through lands in the queue with a fuzzy name suggestion. Confirming writes a new
@@ -412,29 +569,35 @@ What falls through lands in the queue with a fuzzy name suggestion. Confirming w
 
 ### attended_minutes(person, event)
 
-The one place attendance is aggregated. Never compute it inline. It returns the minutes
-**per session**, and the event total is their sum.
+The one place attendance is aggregated. Never compute it inline. It returns, **per
+session**, what each source claims and the proposed figure.
 
-1. Take the event's **active** rows whose `person` resolves to this person.
-2. **Timed rows** (`join_at`/`leave_at` set, which includes room-roster rows): take the
-   **union** of their intervals. `duration_seconds` is deliberately ignored for these rows,
+1. Take the event's **active** rows whose `person` resolves to this person, grouped by
+   `source`.
+2. **Timed rows** (Teams, timed manual, room roster): take the **union** of their
+   intervals within the source. `duration_seconds` is deliberately ignored for these rows,
    because summing it double-counts overlaps and counts waiting-room time.
-3. For each session, measure how much of that union falls inside the session's own times.
-   The first session opens **five minutes early** and the last closes **five minutes late**
-   (symmetric grace at the ends of the whole event, not around each session). Time
-   between sessions counts for nothing.
-4. **Hours-only rows** (no times) name a session; their `duration_seconds` is added to it.
-5. Cap each session at its own length, then convert to whole minutes, rounding down.
-   Joining early can make up for leaving early, but nobody attends a talk for longer than
-   it ran, and this is the figure a certificate line prints. When hours-only rows are what
-   pushed a session over, the function logs a warning and the person is flagged for
-   review: it usually means a duplicate manual row.
-6. Report the source: `teams` (only Teams rows), `manual` (only manual or room-roster
-   rows), `mixed` (both), or `self_reported` (see below).
+3. For each session, measure how much of each source's union falls inside the session's
+   own times. The first session opens **five minutes early** and the last closes **five
+   minutes late** (symmetric grace at the ends of the whole event, not around each
+   session). Time between sessions counts for nothing.
+4. **Rows without times** claim their session: an hours-only manual row claims its
+   `duration_seconds`, a sign-in sheet tick or a QR scan claims the whole session.
+5. Cap each source's claim at the session's length, then take the **highest claim across
+   sources** as the **proposed minutes**, in whole minutes rounded down. Nobody attends a
+   talk for longer than it ran. When hours-only rows are what pushed a claim over, the
+   function logs a warning and the person is flagged for review: it usually means a
+   duplicate manual row.
+6. Report, per session, each source's claim, the proposed figure, and whether the sources
+   **disagree** by more than `ATTENDANCE_DISAGREEMENT_MINUTES` (default 5).
 
-`sessions_attended(person, event)` is the sessions where that measure reaches at least
-half the session's length. It decides which sessions a person is asked to evaluate, and
-which titles a certificate line lists.
+`sessions_attended(person, event)` is the sessions where the proposed figure reaches at
+least half the session's length. It decides which sessions a person is asked to evaluate,
+and which titles a certificate line lists.
+
+**Proposed is not confirmed.** Credit on a certificate counts only minutes a staff member
+has signed off (`SessionAttendanceDecision`, below). The credits page shows proposed
+minutes at once, marked pending, so one busy fortnight does not stall everybody.
 
 `attended_minutes` lives in the attendance app and only knows about attendance rows. The
 self-report fallback sits one layer up, in `credits.rules.creditable_time(person, event)`,
@@ -448,6 +611,47 @@ Claiming less is not flagged. Recorded minutes still win, even when they add up 
 
 The docstring repeats step 2 in plain words. Someone will try to "optimize" this back into
 a `SUM(duration_seconds)`, and that would be wrong.
+
+### SessionAttendanceDecision: sign-off
+
+Credit counts only confirmed minutes. A decision is one staff member's sign-off of one
+person's minutes for one session.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| id | UUID pk | |
+| person | FK Person | |
+| session | FK Session | |
+| confirmed_minutes | int | What counts. Zero is a valid decision |
+| basis | enum | sources_agree, highest_claim, manual |
+| based_on | jsonb | The attendance row ids and each source's claim at the moment of sign-off |
+| proposed_minutes | int | What the system proposed, for the record |
+| comment | text | Required when `confirmed_minutes` differs from `proposed_minutes` |
+| confirmed_by, confirmed_at | FK User, timestamptz | |
+| supersedes | one-to-one SessionAttendanceDecision, nullable | A correction points back at the decision it replaces |
+
+Append-only. The **current** decision for a person and session is the one nothing
+supersedes. A correction is a new decision with new hours and a reason, superseding the
+old one, and it needs its own sign-off; nothing is edited.
+
+**Confirm with exceptions.** One "confirm this event" action writes a decision for every
+person-and-session where the sources agree (or there is one source), with
+`basis = sources_agree`. Rows where sources disagree by more than the threshold are held
+back and presented one by one, with each source's claim, for a human to pick. Several
+thousand clicks a year is the work this project exists to remove, and an admin clicking
+through without reading is a weaker control than none.
+
+Sign-off is per person, with one action writing all of that person's sessions, and a
+checkbox per session so a single session can be adjusted before the person is signed off.
+
+**Unmatched rows cannot be signed off.** The event's sign-off screen shows how many rows
+are still in the match queue and will not confirm a session that has unmatched rows for
+it until the queue is cleared or the rows are superseded.
+
+**Sign-off blocks certificates, not the credits page.** `credit_breakdown` reports both
+proposed and confirmed credit; a certificate is issued from confirmed minutes only, and
+the issue action refuses while any event in the period has unconfirmed rows for the
+person.
 
 ### Manual corrections and room attendance
 
@@ -524,7 +728,7 @@ Frozen after insert except `closed_at`. Every grant is audit-logged.
 
 Limits on self-service: at most `EVALUATION_REOPENINGS_MAX` (three) per person per session,
 and never past the end of the accreditation year containing the event
-(`ACCREDITATION_YEAR_END`, a month and day). A program admin can override both, which is
+(the program's accreditation year end, a month and day). A program admin can override both, which is
 logged against them.
 
 The credits page lists sessions attended but not yet evaluated, each with the open form,
@@ -549,8 +753,9 @@ question is reworded.
 No stored credit total anywhere except an issued certificate.
 
 There are **two kinds of credit, tracked and reported separately** even while both pay
-one credit per hour (`CREDIT_RATES_PER_HOUR`, a setting per kind). A blended figure
-cannot be split retroactively.
+one credit per hour. The rates are per program (`Program.attendance_rate_per_hour`,
+`teaching_rate_per_hour`), read from the event's program. A blended figure cannot be
+split retroactively.
 
 - **Teaching**: for each session the person is in `SessionPresenter` for, the session's
   full length. A presenter is by definition present for their own talk, so this is not
@@ -568,34 +773,37 @@ Each rule lives in its own function:
 
 ```
 evaluation_gate(person, session)       -> bool     # a complete evaluation of THAT session
-creditable_time(person, event)         -> per session: minutes, source, attended,
-                                          evaluated, presented, review reasons
-credits_for_minutes(minutes, kind)     -> Decimal  # minutes / 60 * rate, to the hundredth
+creditable_time(person, event)         -> per session: proposed and confirmed minutes,
+                                          sources, attended, evaluated, presented,
+                                          review reasons
+credits_for_minutes(minutes, rate)     -> Decimal  # minutes / 60 * rate, to the hundredth
 attendance  = min(credits_for_minutes(sum of minutes in non-presented sessions that pass
-                  the gate), event.accredited_credits) + attendance adjustments, >= 0
-teaching    = credits_for_minutes(sum of presented session lengths)
+                  the gate, attendance rate), event.accredited_credits)
+              + attendance adjustments, >= 0
+teaching    = credits_for_minutes(sum of presented session lengths, teaching rate)
               + teaching adjustments, >= 0
 ```
 
+Both figures exist twice: **proposed**, from `attended_minutes`, shown on the credits
+page as pending; and **confirmed**, from the current `SessionAttendanceDecision` per
+session, which is what a certificate prints.
+
 The gate is per session so that evaluating one talk cannot claim credit for three.
-`accredited_credits` caps attendance only: it is what the event is accredited for as an
-attended activity, and stays a field so an accrediting body can approve fewer credits
-than the clock says.
+`accredited_credits` caps attendance only: it is the accreditor-set ceiling for the event
+as an attended activity. It keeps its quarter-step constraint because it is a ceiling
+someone approved, not a computed figure; a three-hour event capping at 3.00 while someone
+shows 2.97 is correct.
 
 Minutes count exactly as recorded, however few: five minutes of a talk is five minutes,
 once that talk's form is filled in. There is no minimum and no rounding up; 59 minutes of
-a 60-minute session is 59/60 of a credit, 0.98. The only rounding before issue is to two
-decimal places, downward, applied once per kind to the event's total minutes.
-
-**Rounding happens at issue, not before.** Credit stays exact all year. When the year-end
-certificate is generated, each kind's exact credits for the year are added up and rounded
-on their own to the nearest whole credit, halves up (`certificates.rules.certificate_total`);
-the printed total is the sum of the two rounded kinds. Lines keep their exact figures.
-`certificates.figures.certificate_figures` computes exactly what would print.
+a 60-minute session is 59/60 of a credit, 0.98. The only rounding anywhere is to two
+decimal places, downward, applied once per kind to the event's total minutes. **There is
+no rounding at issue.** Credit is hours attended, so the certificate says the hours: the
+exact sum of its lines, to two decimals.
 
 Credit is a moving target: a reopened evaluation can earn credit after a certificate was
 issued. That is not an error. The person's admin page shows earned against certified
-credit per event and kind, and the answer is a reissue, on request.
+credit per program, event and kind, and the answer is a reissue, on request.
 
 ### CreditAdjustment
 
@@ -622,11 +830,13 @@ because someone will file it with a college.
 | --- | --- | --- |
 | id | UUID pk | |
 | person | FK Person | |
+| program | FK Program | **One certificate per program.** A person attending two programs collects two. Issued by that program's admin |
+| program_name, institution_name | text | Snapshotted. Programs get renamed |
 | certificate_type | enum | cme, attendance. Snapshot of what `role` implied at issue |
-| period_start, period_end | date | The accreditation year |
-| attendance_credits | decimal | Frozen at issue. The year's attendance credit, rounded on its own to a whole credit |
-| teaching_credits | decimal | Frozen at issue. The year's teaching credit, rounded on its own |
-| total_credits | decimal | `attendance_credits + teaching_credits` (check constraint). Both lines print, and the total; never one blended figure |
+| period_start, period_end | date | The program's accreditation year |
+| attendance_credits | decimal | Frozen at issue. The **exact** sum of the lines' attendance credits, two decimals |
+| teaching_credits | decimal | Frozen at issue. The exact sum of the lines' teaching credits |
+| total_credits | decimal | `attendance_credits + teaching_credits` (check constraint). Both lines print, and the total; never one blended figure, never rounded |
 | recipient_name | text | Snapshotted as typed. Names change |
 | recipient_credential | text | Snapshotted |
 | licence_number, licence_jurisdiction | text | Snapshotted, **as entered**, never the normalized form |
@@ -651,13 +861,16 @@ One line per **event**. Per-session credit does not exist.
 | event_title | text | Snapshotted |
 | event_date | date | Snapshotted |
 | session_titles | JSON array of text | The sessions attended (at least half of each, not presented), snapshotted. Print-only |
-| attended_minutes | int | Snapshotted. Minutes in sessions the person did not present |
-| minutes_source | enum | teams, manual, mixed, self_reported |
-| attendance_computed | decimal | From the credit function |
+| attended_minutes | int | Snapshotted. **Confirmed** minutes in sessions the person did not present |
+| minutes_source | enum | teams, signin_sheet, qr, manual, mixed, self_reported |
+| attendance_rate_per_hour | decimal | The program's rate **at issue**, snapshotted. A later rate change never touches this line |
+| decisions | JSON array of ids | The `SessionAttendanceDecision` rows this line was issued from |
+| attendance_computed | decimal | From the credit function, at that rate |
 | attendance_adjustment | decimal | Sum of attendance `CreditAdjustment` deltas |
 | attendance_credits | decimal | `max(computed + adjustment, 0)` |
 | presented_session_titles | JSON array of text | The sessions presented, snapshotted |
 | teaching_minutes | int | Sum of presented session lengths |
+| teaching_rate_per_hour | decimal | The program's rate at issue, snapshotted |
 | teaching_computed, teaching_adjustment, teaching_credits | decimal | As for attendance |
 
 Unique on `(certificate, event)`.
@@ -675,12 +888,16 @@ Revocation sets `revoked_at` and `revoked_reason`. That is a status change, not 
 the printed content, and it is audit-logged.
 
 Issuing and revoking each have their own permission (`issue_certificate`,
-`revoke_certificate`), separate from general admin access.
+`revoke_certificate`), separate from general admin access, and are program-scoped: a
+program admin issues only their program's certificates.
+
+Issuing refuses while any of the person's events in the period has attendance that is
+not signed off. Everything a certificate needs has to be confirmed first.
 
 ### Verification
 
-The public page at `/verify/<code>` shows recipient name, credential, events and sessions,
-credit total, issue date. Nothing else: no email address, no licence number, no link to any
+The public page at `/verify/<code>` shows recipient name, credential, institution and
+program, events and sessions, attendance and teaching credit and their total, issue date. Nothing else: no email address, no licence number, no link to any
 other record.
 
 `verification_code` is random, not sequential, so certificates can't be enumerated. Use an

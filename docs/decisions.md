@@ -65,13 +65,13 @@ stricter candidate from the earlier open question is now buildable, because sess
 times, and this is it. `accredited_credits` stays a field so an accrediting body can
 approve fewer credits than the clock says.
 
-**Rounding happens once, when the year-end certificate is generated: the year's total
-to the nearest whole credit.**
-During the year credit is exact, minutes over sixty, everywhere it is shown. At issue
-the exact credits for the year are added up and rounded to the nearest integer, halves
-up, by `certificates.rules.certificate_total`. The event lines stay exact, so they do not
-always sum to the printed total. Nothing stored before issue is rounded, so a late
-evaluation or a correction never has to undo a rounding.
+**Certificates print the exact sum, to two decimals. No rounding at issue, anywhere.**
+Rounding the year's total to a whole credit was decided and reversed: someone with 2.40
+earned prints 2 and loses 0.40 they earned, and a certificate whose lines do not add up to
+its total is what makes an accreditor distrust the document. Credit is hours attended, so
+the certificate says the hours. `accredited_credits` keeps its quarter-step constraint: it
+is an accreditor-set ceiling, not a computed figure, and a three-hour event capping at
+3.00 while someone shows 2.97 is correct.
 
 **Credit is hours attended: minutes divided by sixty, no quarter rounding.**
 59 minutes of a 60-minute talk is 59/60 of a credit, 0.98. Rounding to the nearest
@@ -171,10 +171,6 @@ an attendee like anyone else.
 A presenter should not have to evaluate their own talk; presenting is enough. The
 attendance gate is unchanged. Pending confirmation with McGill CPD.
 
-**The certificate rounds each kind on its own.**
-The year's attendance and teaching credits are each rounded to the nearest whole credit,
-and the printed total is their sum, so the three printed figures always add up.
-
 **Hours-only manual rows name a session.**
 A row with minutes but no times has to say which talk the minutes belong to, or they could
 not be credited to one. Timed rows are matched to sessions by their times.
@@ -210,6 +206,77 @@ Adding nullable columns later is a trivial migration. The hard part of retention
 An owner role runs migrations; the app role has no DDL rights and cannot update or delete
 `AuditLog`. One role locally.
 
+**Institution and Program are two levels above everything.**
+An institution is a deployment; a program (Emergency Medicine, Internal Medicine, General
+Surgery) is a row inside it with its own credit rates, default accredited credits,
+accreditation year end, COI questionnaire version, series name and retention period.
+Everything that was a per-deployment setting and differs between programs moved onto the
+program row, editable by that program's admin. Concordia is near-term and real, with three
+to six programs, so this is built properly now rather than left as FKs for later.
+
+**Staff are scoped to programs, in authorization, not by filters bolted onto queries.**
+The three groups stay as permission templates; `ProgramRole` says which programs a user
+holds which role in. `core/authz.py` grows `for_programs()` beside `for_person()`, and the
+URL-walking test covers program scope the way it covers person scope. An Emergency
+Medicine coordinator never sees Internal Medicine's match queue, and another program's id
+in a URL is a 404.
+
+**One certificate per program, with the rates snapshotted on every line.**
+A person attending two programs collects two certificates, each issued by that program's
+admin; the credits page shows a total per program, never one number. The program's
+attendance and teaching rates are copied onto each certificate line at issue, so a rate
+changed in March changes nothing already issued and next year's certificate does not
+revalue last year's sessions. The credits page shows the rate per event so a mid-year
+change does not look like a bug.
+
+**Three attendance sources are reconciled, never added.**
+A Teams export, a sign-in sheet and a QR scan are independent claims about the same person
+in the same session, and each under-reports differently: Teams misses the person in the
+room, QR misses someone who left early, paper proves presence but not duration. The
+proposed figure per session is the highest claim, capped at the session's length: highest
+because every source under-reports, capped because no source can exceed the talk. Someone
+in all three shows three rows and one figure. All sources are `AttendanceRecord` rows, so
+supersession and aggregation are unchanged.
+
+**Every import is previewed before anything is stored.**
+Which event matched and which date reading was chosen; every participant with their
+proposed minutes per session; the rule stated on screen (everyone is an attendee,
+presenter hours come only from `SessionPresenter`); and the rows worth a look flagged.
+The file waits in a pending area with no database row until the reviewer confirms.
+
+**Credit counts only signed-off minutes; sign-off blocks certificates, not the credits
+page.**
+`SessionAttendanceDecision` is one staff member's confirmation of one person's minutes for
+one session, append-only, corrected by a superseding decision that needs its own sign-off.
+"Confirm this event" signs off every row where the sources agree and holds back the rest
+for a human, because several thousand clicks a year is the work this project exists to
+remove and an admin clicking through without reading is a weaker control than none.
+Sign-off is per person with per-session checkboxes. Unmatched rows cannot be signed off:
+the match queue comes first. An attendee sees their hours as pending at once; nothing is
+certified until confirmed, so one busy fortnight does not stall everybody.
+
+**QR sign-in is one scan per session, credited as the whole session.**
+Not scan-in/scan-out: people forget to scan out, and orphan check-ins are a worse
+reconciliation problem than the one being solved; the sign-off step catches bad claims.
+The displayed code rotates every thirty seconds so a photographed code texted to someone
+at home does not work, and the page it opens requires sign-in so a scan is tied to a
+person, never a typed name.
+
+**The paper sign-in sheet is pre-filled and carries hidden ids.**
+One row per known person, a column per session, blank rows for walk-ins. Transcribing is
+ticking boxes, which keeps spelling variants out of the match queue; re-import matches on
+the hidden person id, and a hidden signed event id means a sheet is refused for any event
+but its own. It goes through the same preview-and-confirm flow as a Teams export.
+
+**A public cross-institution directory is a separate read-only site, deferred.**
+It must span institutions, which are in separate databases, so it cannot live inside an
+instance. Each instance will push published event summaries to it: title, date, time,
+objectives, presenter names and affiliations, join link, institution, program. No people,
+no attendance, no credits, no identity, no authentication; all of it is already
+flyer-public. Deferred until after Concordia launches. Until then the only obligation is
+not to build the event model in a way that makes publishing awkward: everything to be
+published is on `RoundsEvent` and `Session` without a join through private data.
+
 **Multi-tenant means one instance per institution, not a tenant column.**
 If a second institution uses this, it gets the same codebase with its own database,
 process, env file and hostname. Two reasons. First, in a shared schema every query needs a
@@ -222,10 +289,11 @@ tenants and should be revisited beyond that. Nothing is built for it yet; see
 `deployment.md`.
 
 **Staff roles are Django groups, separate from `Person.role`.**
-Coordinator, Program admin and Read only. Credit adjustments, certificate issue and
-revocation, and record merging are Program admin only, because those are the fraud
-surface: a hired coordinator must not be able to mint a certificate. `Person.role` is
-unrelated; it only decides which certificate template an attendee gets.
+Coordinator, Program admin and Read only, held per program through `ProgramRole`. Credit
+adjustments, certificate issue and revocation, and record merging are Program admin only,
+because those are the fraud surface: a hired coordinator must not be able to mint a
+certificate. `Person.role` is unrelated; it only decides which certificate template an
+attendee gets.
 
 **Non-physicians get an attendance certificate, not a CME certificate.**
 Rounds pull in nurses, pharmacists, fellows, grad students. Same pipeline, different
@@ -243,6 +311,8 @@ split is the entire retrofit. No provider abstraction, no job queue, no scaffold
 ## Open
 
 **Retention period.**
+`Program.retention_years` is where the answer goes; the policy itself is still open.
+
 Law 25 gives a right to erasure; accreditation bodies require retention for several years.
 These pull against each other. Check what CMQ actually requires before committing to a
 number, then write it into the privacy notice.
@@ -264,7 +334,7 @@ room-roster links and supersessions. Not designed yet. `parser_version` is recor
 uploads and rows so there is something to work with.
 
 **Series name.**
-`RoundsEvent.title` defaults to a `SERIES_NAME` setting. The value in settings is a
+`RoundsEvent.title` defaults to the program's `series_name`. The seeded value is a
 placeholder until the real name is confirmed.
 
 **Is `is_complete` stored or computed?**

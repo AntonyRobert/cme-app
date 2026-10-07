@@ -136,9 +136,18 @@ Postgres: database and peer-auth roles for that instance only
 
 ## Multi-tenant deployment
 
-**Decision: one instance per institution, not a tenant column in the schema.** Same
-codebase; separate database, process, env file and uploads directory; routed by hostname in
-Caddy. The reasoning is in `decisions.md`.
+**Decision, confirmed: one instance per institution; programs are rows inside it.** McGill
+is one deployment with its three programs; Concordia is another. Same codebase; separate
+database, process, env file and uploads directory; routed by hostname in Caddy. The
+reasoning is in `decisions.md`.
+
+The two levels fail differently, on purpose. McGill's and Concordia's records never share
+a database, so no missed filter can leak one university's accreditation data into
+another's; that also makes the processor relationship with Concordia a simple sentence in
+a contract. Program scoping within an instance is a query filter: a real bug if missed,
+but a far smaller one, contained within one institution. Programs do not get hostnames.
+
+Both institutions are in Quebec, so data residency is unchanged: `ca-central-1`.
 
 Nothing here is built yet. There is one tenant and no second institution. It is written
 down now because it decides the shape of `deploy.sh` and the systemd units, and those are
@@ -184,9 +193,17 @@ For the same reason HSTS stays without `includeSubDomains`, which is how `prod.p
 
 ### Per-tenant configuration
 
-Institutions differ in more than their name: accrediting body, credit rules, COI wording,
-certificate template, retention period, series name, allowed email domains. Those live in
-each instance's env file, settings and database, not in a shared table.
+Institutions differ in more than their name: accrediting body, certificate template,
+allowed email domains, hostname. Those live in each instance's env file, settings and
+database, not in a shared table. What differs between *programs* of one institution
+(credit rates, accredited-credit default, accreditation year end, COI questionnaire
+version, series name, retention period) lives on the `Program` row inside the instance.
+
+### The public directory, later
+
+A cross-institution advertising page cannot live in an instance, because instances do not
+share a database. It will be a small separate read-only site that each instance pushes
+published event summaries to (`decisions.md`). Not built until after Concordia launches.
 
 ### Ceiling
 
