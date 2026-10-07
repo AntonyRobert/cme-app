@@ -536,8 +536,14 @@ typing names, which keeps spelling variants out of the match queue.
 A tick becomes an `AttendanceRecord` with `source = signin_sheet`, `created_by` the staff
 member, the session, no upload and a claim of the whole session. Walk-ins are typed as a
 name and land in the review queue like any unmatched row. The sitting is audit-logged
-once, with the rows it wrote. Spreadsheet upload of the sheet is deferred: the typed-in
-sheet is simpler to support and leaves nothing to parse.
+once (`attendance.signin_sheet_entered`), with the rows it wrote. Spreadsheet upload of
+the sheet is deferred: the typed-in sheet is simpler to support and leaves nothing to
+parse.
+
+The list is the program's known people: anyone who attended, evaluated or presented at
+one of its events, merged duplicates folded into their root. Ticks already recorded show
+locked; re-submitting the page adds nothing. A tick entered by mistake is withdrawn by
+superseding its row, never by deleting it (`attendance/sheet.py`).
 
 ### QR sign-in
 

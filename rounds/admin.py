@@ -92,12 +92,12 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
     date_hierarchy = "date"
     search_fields = ["title", "teams_meeting_title", "sessions__title"]
     inlines = [SessionInline]
-    readonly_fields = ["credit_summary", "signoff_link"]
+    readonly_fields = ["credit_summary", "attendance_links"]
     fieldsets = [
         (
             None,
             {
-                "fields": ["program", "title", "date", "status", "accredited_credits", "signoff_link"],
+                "fields": ["program", "title", "date", "status", "accredited_credits", "attendance_links"],
                 "description": "A blank title takes the program's series name; blank credits "
                 "take the program's default.",
             },
@@ -166,17 +166,86 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
                 self.admin_site.admin_view(self.signoff_view),
                 name="rounds_roundsevent_signoff",
             ),
+            path(
+                "<uuid:pk>/signin-sheet/",
+                self.admin_site.admin_view(self.signin_sheet_view),
+                name="rounds_roundsevent_signin_sheet",
+            ),
             *super().get_urls(),
         ]
 
-    @admin.display(description="Sign-off")
-    def signoff_link(self, obj):
+    @admin.display(description="Attendance")
+    def attendance_links(self, obj):
         if not obj.pk:
             return "-"
         return format_html(
+            '<a class="button" href="{}">Import paper sign-in sheet</a> &nbsp; '
             '<a class="button" href="{}">Review and sign off attendance</a>',
+            reverse("admin:rounds_roundsevent_signin_sheet", args=[obj.pk]),
             reverse("admin:rounds_roundsevent_signoff", args=[obj.pk]),
         )
+
+    def _writable_event(self, request, pk):
+        event = self.get_queryset(request).filter(pk=pk).first()
+        if event is None:
+            raise Http404
+        if not self.has_change_permission(request, event):
+            raise PermissionDenied
+        return event
+
+    def signin_sheet_view(self, request, pk):
+        from attendance.models import AttendanceRecord
+        from attendance.sheet import WALK_IN_ROWS, enter_sheet, existing_ticks, sheet_people
+
+        event = self._writable_event(request, pk)
+        sessions = list(event.sessions.order_by("start_at", "position"))
+        people = sheet_people(event.program)
+
+        if request.method == "POST":
+            by_pk = {str(p.pk): p for p in people}
+            ticks = set()
+            for person in people:
+                for session in sessions:
+                    if request.POST.get(f"tick_{person.pk}_{session.pk}"):
+                        ticks.add((person, session))
+            walk_ins = []
+            for i in range(WALK_IN_ROWS):
+                name = request.POST.get(f"walkin_{i}_name", "")
+                ticked = [s for s in sessions if request.POST.get(f"walkin_{i}_{s.pk}")]
+                if name.strip() and ticked:
+                    walk_ins.append((name, ticked))
+            result = enter_sheet(event, ticks, walk_ins, user=request.user, request=request)
+            message = f"Recorded {result.written} tick(s)"
+            if result.walk_ins:
+                message += f", {result.walk_ins} of them for names not on the list, now in the match queue"
+            if result.already:
+                message += f"; {result.already} already recorded and left alone"
+            self.message_user(request, message + ".", messages.SUCCESS)
+            return redirect("admin:rounds_roundsevent_signin_sheet", event.pk)
+
+        have = existing_ticks(event)
+        rows = [
+            {
+                "person": person,
+                "cells": [
+                    {"session": session, "recorded": (person.pk, session.pk) in have}
+                    for session in sessions
+                ],
+            }
+            for person in people
+        ]
+        context = {
+            **self.admin_site.each_context(request),
+            "title": f"Paper sign-in sheet: {event}",
+            "opts": self.model._meta,
+            "event": event,
+            "sessions": sessions,
+            "rows": rows,
+            "walk_in_rows": range(WALK_IN_ROWS),
+            "records_url": changelist_url(AttendanceRecord, event__id__exact=event.pk),
+            "signoff_url": reverse("admin:rounds_roundsevent_signoff", args=[event.pk]),
+        }
+        return TemplateResponse(request, "admin/rounds/roundsevent/signin_sheet.html", context)
 
     @admin.display(description="Signed off")
     def signoff_state(self, obj):
@@ -194,11 +263,7 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
         from attendance.signoff import confirm_event, confirm_person, review, unmatched_sessions
         from people.models import Person
 
-        event = self.get_queryset(request).filter(pk=pk).first()
-        if event is None:
-            raise Http404
-        if not self.has_change_permission(request, event):
-            raise PermissionDenied
+        event = self._writable_event(request, pk)
 
         if request.method == "POST":
             action = request.POST.get("action")

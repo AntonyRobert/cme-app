@@ -1,0 +1,73 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls dicts %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+  &rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+  &rsaquo; <a href="{% url opts|admin_urlname:'change' event.pk %}">{{ event }}</a>
+  &rsaquo; Paper sign-in sheet
+</div>
+{% endblock %}
+
+{% block content %}
+<p>Tick what the paper sheet shows. A tick says the person was in the room for that
+session; it claims the whole session and is reconciled with Teams and QR at sign-off.
+Ticks already recorded are locked: to withdraw one, supersede its row under
+<a href="{{ records_url }}">Attendance records</a>. Nothing here counts for credit until
+the event is <a href="{{ signoff_url }}">signed off</a>.</p>
+
+<form method="post">
+  {% csrf_token %}
+  <table>
+    <thead>
+      <tr>
+        <th>Person</th>
+        {% for session in sessions %}<th>{{ session.position }}. {{ session.title|truncatechars:28 }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td>{{ row.person }}{% if row.person.credential %}, {{ row.person.credential }}{% endif %}{% if row.person.affiliation %} <span class="help">{{ row.person.affiliation }}</span>{% endif %}</td>
+        {% for cell in row.cells %}
+          <td>
+            {% if cell.recorded %}
+              <input type="checkbox" checked disabled title="Already recorded"> <span class="help">recorded</span>
+            {% else %}
+              <input type="checkbox" name="tick_{{ row.person.pk }}_{{ cell.session.pk }}" value="1">
+            {% endif %}
+          </td>
+        {% endfor %}
+      </tr>
+    {% empty %}
+      <tr><td colspan="{{ sessions|length|add:1 }}">Nobody is known to this program yet. Type the names below.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Not on the list</h2>
+  <p class="help">Type the name as written on the sheet. These rows go to the match queue, where
+  they are matched to a person or a new person is created.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name on the sheet</th>
+        {% for session in sessions %}<th>{{ session.position }}. {{ session.title|truncatechars:28 }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+    {% for i in walk_in_rows %}
+      <tr>
+        <td><input type="text" name="walkin_{{ i }}_name" maxlength="300" style="width:20em"></td>
+        {% for session in sessions %}<td><input type="checkbox" name="walkin_{{ i }}_{{ session.pk }}" value="1"></td>{% endfor %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="submit-row">
+    <input type="submit" class="default" value="Record these ticks">
+  </div>
+</form>
+{% endblock %}

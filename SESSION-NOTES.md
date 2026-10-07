@@ -10,7 +10,7 @@ newest section.
 
 Written 2026-10-07. Groups 1 to 5 of the order in your review are built: exact
 certificates, Institution and Program, the three sources reconciled, the upload preview,
-and sign-off. QR sign-in and the paper sign-in sheet entry screen are **not started**.
+and sign-off, plus the paper sign-in sheet entry screen. QR sign-in is **not started**.
 Nothing pushed.
 
 ### What was built
@@ -60,8 +60,14 @@ Nothing pushed.
   is confirmed, then "not yet certified" until a certificate is issued.
 - **The sign-in sheet is typed in, not uploaded** (your note mid-build). `signin_sheet`
   rows carry no upload: `created_by` and one audit entry per sitting are the provenance.
-  The constraint and docs are updated (`0005_signin_sheet_is_typed_in`). The entry screen
-  itself is the next piece.
+  The constraint and docs are updated (`0005_signin_sheet_is_typed_in`).
+- **"Import paper sign-in sheet"** on the event page. Lists the program's known people
+  (anyone who attended, evaluated or presented at one of its events) with a checkbox per
+  session, five blank lines for names not on the list, and a Record button. A tick is a
+  `signin_sheet` row claiming the whole session; a name not on the list is an unmatched
+  row in the match queue. Recorded ticks come back locked and re-submitting adds nothing.
+  Same permission as sign-off (change on the event). Ten tests in
+  `attendance/tests/test_sheet.py`.
 
 ### Decisions this round that your review did not settle
 
@@ -97,7 +103,9 @@ Nothing pushed.
 
 ### Deviations
 
-- Group 5's "sign-in sheet upload" is replaced by typed-in entry, as you said. The
+- Group 5's "sign-in sheet upload" is replaced by typed-in entry, as you said, and the
+  entry screen is built even though the original order said to stop before it; your
+  mid-build note read as "do this instead", so I did. QR is not started. The
   `UPLOADED_SOURCES` set is now Teams only. If spreadsheet upload comes back later it can
   reuse the pending-and-preview flow unchanged.
 - The preview shows minutes per session from the raw intervals, before supersession and
@@ -118,6 +126,13 @@ Nothing pushed.
 - `signin_sheet` rows have no reason text, by design, but also no batch id tying the rows
   of one sitting together beyond the audit entry. If a sheet has to be withdrawn as a
   whole, the audit entry's row list is what you would supersede from.
+- The sheet's people list grows with the program: after a year it is everyone who ever
+  came. That is what a paper sheet pre-filled from the mailing list would show too, but
+  if it gets long the page wants a "recent attendees first" split or a search box. Not
+  built.
+- A walk-in has to be matched in the queue before the event can be signed off, like any
+  unmatched row. Five blank lines is a guess at how many a sheet has; the page can be
+  submitted twice.
 
 ## Round three: the real export, and two kinds of credit
 
