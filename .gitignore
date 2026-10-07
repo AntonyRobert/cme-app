@@ -86,3 +86,6 @@ desktop.ini
 
 # --- Claude Code local state -------------------------------------------------
 .claude/settings.local.json
+
+# The server checkout holds the owner user's deploy key beside the code.
+/.ssh/

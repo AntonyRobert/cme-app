@@ -29,10 +29,12 @@ parameterized by `<org>` (today: `mcgill`), even with one tenant.
    ```
    The last argument is the ACME email: where Let's Encrypt sends certificate expiry
    warnings. Use an address someone reads.
-4. **The first run is expected to fail at the clone.** It generates a deploy key for the
+4. **The first run is expected to fail at the fetch.** It generates a deploy key for the
    owner user `cme_mcgill_owner`, prints the public half, and stops because that key is
    not on GitHub yet. Add it: repo → Settings → Deploy keys → Add, **read-only**. Rerun
-   the same command; the clone goes through and the script finishes.
+   the same command; the repository is set up in place in `/srv/cme/mcgill` (the
+   directory already holds `uploads/` and `.ssh/`, so it is initialised and fetched
+   rather than cloned) and the script finishes. Every later run just pulls.
 5. **Afterwards, remove the temporary key** you used for the bootstrap clone from GitHub
    (Settings → Deploy keys) and `rm -rf /tmp/cme-app`. The server pulls with the owner
    user's key and nothing else from now on; one key per purpose.

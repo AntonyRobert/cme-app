@@ -202,6 +202,12 @@ listed). Nothing pushed.
   installed with the sshd jail explicitly enabled; the ACME email is the script's 4th
   argument. `grants.sql`'s audit revoke is pinned by a test, including that it runs
   after the blanket grant.
+- **The checkout is initialised in place, not cloned** (your catch: the directory already
+  holds `uploads/` and `.ssh/` when git runs, and `git clone` refuses a non-empty
+  target). `git init`, remote, fetch, `checkout -B main origin/main`; a failed fetch
+  removes the half-made `.git` so the rerun starts clean; an existing checkout is pulled.
+  Dry-run locally against a non-empty directory, second run included. `/.ssh/` is now
+  gitignored so the key can never be added by accident.
 - **Two OS users per tenant**, not one: `cme_<org>_owner` (migrate, owns the checkout)
   and `cme_<org>` (gunicorn, owns uploads). Peer auth maps each to its role, so the only
   way to run DDL is to be the owner user, and the serving process never is.

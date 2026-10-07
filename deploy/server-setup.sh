@@ -11,8 +11,9 @@
 #
 # Ubuntu 24.04 LTS on Lightsail. Idempotent where it reasonably can be: running
 # it twice is safe, and it is EXPECTED to run twice: the first run generates the
-# owner user's deploy key and stops at the clone, because that key is not on
-# GitHub yet. Add it (read-only), rerun, and the clone goes through. It writes
+# owner user's deploy key and stops at the fetch, because that key is not on
+# GitHub yet. Add it (read-only), rerun, and the checkout appears in place;
+# later runs pull. It writes
 # /etc/cme/<org>.env with a fresh SECRET_KEY; everything else in that file is
 # settings, not secrets.
 #
@@ -20,7 +21,7 @@
 #   1. packages: Python 3.12 (Ubuntu's own), git, fail2ban, Postgres 17 (PGDG repo), Caddy (official repo)
 #   2. OS users: cme_<org> (runs gunicorn, owns uploads) and cme_<org>_owner (runs migrate, owns the checkout)
 #   3. Postgres: two peer-authenticated roles matching those users, one database owned by the owner role
-#   4. directories per docs/deployment.md: /srv/cme/<org>, /etc/cme/<org>.env, /run/cme; the deploy key; the clone
+#   4. directories per docs/deployment.md: /srv/cme/<org>, /etc/cme/<org>.env, /run/cme; the deploy key; the checkout (in place, pulled on reruns)
 #   5. systemd: cme@.service template, cme-backup@.service and .timer, /run/cme via tmpfiles
 #   6. Caddy: a site block for the hostname proxying to the tenant's socket, static files served directly
 set -euo pipefail
@@ -191,15 +192,29 @@ if [[ ! -f "$OWNER_SSH/id_ed25519" ]]; then
   echo "should be removed from GitHub once this one works: one key per purpose, and that purpose is this user."
 fi
 
-# The checkout itself, if not there yet.
+# The checkout. The directory already holds uploads/ and .ssh/ by now, so a
+# plain `git clone` would refuse it; the repository is initialised in place
+# instead (init, remote, fetch, checkout), and on later runs simply pulled.
+# Everything git does here runs as the owner user with its own key only.
+GIT_SSH="ssh -i $OWNER_SSH/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=$OWNER_SSH/known_hosts"
+as_owner_git() { sudo -u "$OWNER_USER" -H env GIT_SSH_COMMAND="$GIT_SSH" git -C "$CHECKOUT" "$@"; }
+
 if [[ ! -d "$CHECKOUT/.git" ]]; then
-  say "Cloning as ${OWNER_USER} (expected to fail on the first run, until the key above is on GitHub)"
-  sudo -u "$OWNER_USER" GIT_SSH_COMMAND="ssh -i $OWNER_SSH/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=$OWNER_SSH/known_hosts" \
-    git clone "$GIT_URL" "$CHECKOUT" || {
-    echo "Clone failed. Add the deploy key printed above on GitHub (read-only), then rerun this script." >&2
+  say "Fetching the repository into ${CHECKOUT} as ${OWNER_USER} (fails on the first run until the key above is on GitHub)"
+  as_owner_git init -q -b main
+  as_owner_git remote add origin "$GIT_URL"
+  if ! as_owner_git fetch -q origin main; then
+    rm -rf "$CHECKOUT/.git"  # leave nothing half-made; the rerun starts clean
+    echo "Fetch failed: GitHub did not accept the key. Add the deploy key printed above (read-only), then rerun this script." >&2
     exit 1
-  }
+  fi
+  as_owner_git checkout -q -f -B main origin/main
+  as_owner_git branch -q --set-upstream-to=origin/main main
+else
+  say "Checkout exists; pulling"
+  as_owner_git pull -q --ff-only
 fi
+as_owner_git log -1 --oneline
 chown -R "$OWNER_USER:$APP_USER" "$CHECKOUT/.git"
 
 # --- 5. systemd -----------------------------------------------------------------------
@@ -235,7 +250,7 @@ systemctl reload caddy
 
 say "Done. Next:"
 cat <<NEXT
-  1. If the clone step failed: add the deploy key on GitHub (read-only), rerun this script,
+  1. If the fetch step failed: add the deploy key on GitHub (read-only), rerun this script,
      then remove any earlier deploy key for another user from GitHub and delete the
      temporary clone you ran this from.
   2. Point DNS: A record  ${HOSTNAME_FQDN}  ->  this instance's static IP.
