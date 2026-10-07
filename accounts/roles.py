@@ -9,6 +9,13 @@ migration; their permissions are re-applied from here after every
 `migrate`, so a model added later is covered without a new migration.
 Editing a group's permissions by hand in the admin does not stick.
 
+Groups say WHAT a role may do, model by model. WHICH rows is the program
+scope: a user is in a group because they hold that role in some program
+(programs.ProgramRole), and core.authz narrows every program-owned table
+to the programs they hold a role in. A user who is a coordinator in one
+program and read-only in another is in both groups and may write only in
+the first.
+
 Credit adjustments and certificate issue/revocation are the fraud surface.
 They are listed explicitly under Program admin and nowhere else.
 """
@@ -22,7 +29,7 @@ ROLE_NAMES = [COORDINATOR, PROGRAM_ADMIN, READ_ONLY]
 
 # Staff can see every table of these apps. Staff accounts themselves
 # (accounts, auth) are managed by superusers only.
-VIEWABLE_APPS = ["people", "rounds", "attendance", "credits", "certificates", "audit"]
+VIEWABLE_APPS = ["programs", "people", "rounds", "attendance", "credits", "certificates", "audit"]
 
 # Enter sessions, upload attendance, work the match queue, chase presenters.
 COORDINATOR_PERMISSIONS = [
@@ -56,6 +63,10 @@ PROGRAM_ADMIN_ONLY_PERMISSIONS = [
     "certificates.issue_certificate",
     "certificates.revoke_certificate",
     "people.merge_person",
+    "programs.change_program",
+    "programs.add_programrole",
+    "programs.change_programrole",
+    "programs.delete_programrole",
     "people.add_alloweddomain",
     "people.change_alloweddomain",
     "people.delete_alloweddomain",

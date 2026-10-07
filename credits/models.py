@@ -4,10 +4,15 @@ from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
 
+from core.authz import ProgramScopedQuerySet
 from core.models import AppendOnlyMixin, FrozenFieldsMixin, UUIDModel
 from people.models import Person
 from people.ownership import PersonOwnedQuerySet
 from rounds.models import LearningObjective, RoundsEvent, Session
+
+
+class EvaluationSubmissionQuerySet(PersonOwnedQuerySet, ProgramScopedQuerySet):
+    program_lookup = "session__event__program"
 
 
 class EvaluationSubmission(UUIDModel):
@@ -25,7 +30,7 @@ class EvaluationSubmission(UUIDModel):
         default=False, help_text="All required objective questions are answered."
     )
 
-    objects = PersonOwnedQuerySet.as_manager()
+    objects = EvaluationSubmissionQuerySet.as_manager()
 
     class Meta:
         ordering = ["-submitted_at"]
@@ -62,8 +67,9 @@ class EvaluationSubmission(UUIDModel):
             close_windows(self.person, self.session)
 
 
-class EvaluationResponseQuerySet(PersonOwnedQuerySet):
+class EvaluationResponseQuerySet(PersonOwnedQuerySet, ProgramScopedQuerySet):
     person_lookup = "submission__person"
+    program_lookup = "submission__session__event__program"
 
 
 class EvaluationResponse(UUIDModel):
@@ -133,7 +139,7 @@ class EvaluationWindow(FrozenFieldsMixin, UUIDModel):
         null=True, blank=True, help_text="Set when a complete evaluation is submitted."
     )
 
-    objects = PersonOwnedQuerySet.as_manager()
+    objects = EvaluationSubmissionQuerySet.as_manager()
 
     class Meta:
         ordering = ["-opened_at"]
@@ -154,6 +160,10 @@ class EvaluationWindow(FrozenFieldsMixin, UUIDModel):
 class CreditKind(models.TextChoices):
     ATTENDANCE = "attendance", "Attendance"
     TEACHING = "teaching", "Teaching"
+
+
+class CreditAdjustmentQuerySet(PersonOwnedQuerySet, ProgramScopedQuerySet):
+    program_lookup = "event__program"
 
 
 class CreditAdjustment(AppendOnlyMixin, UUIDModel):
@@ -189,7 +199,7 @@ class CreditAdjustment(AppendOnlyMixin, UUIDModel):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
-    objects = PersonOwnedQuerySet.as_manager()
+    objects = CreditAdjustmentQuerySet.as_manager()
 
     class Meta:
         ordering = ["-created_at"]

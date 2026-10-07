@@ -114,3 +114,78 @@ def changelist_url(model, **filters):
     if filters:
         url += "?" + "&".join(f"{key}={value}" for key, value in filters.items())
     return url
+
+
+# --- Program scope in the admin -------------------------------------------------
+
+
+class ProgramScopedAdminMixin:
+    """
+    For a ModelAdmin whose model's manager has for_programs().
+
+    - The changelist, change form, autocomplete and actions only ever see
+      rows in programs the staff member holds a role in; another program's
+      id in the URL is a 404.
+    - Adding or changing a row needs a write role (coordinator or program
+      admin) in that row's program, or `admin_only_writes` for the fraud
+      surface (adjustments, windows, evaluations, certificates), which
+      needs the program-admin role there.
+    - Foreign keys to program-owned models offer only rows in writable
+      programs, so a form cannot point a new row at another program.
+
+    `program_lookup` is read from the model's queryset.
+    """
+
+    admin_only_writes = False
+
+    def _program_lookup(self):
+        return self.model._default_manager.all().program_lookup
+
+    def _programs_for(self, request):
+        from core.authz import admin_programs, staff_programs, writable_programs
+
+        if self.admin_only_writes:
+            return staff_programs(request.user), admin_programs(request.user)
+        return staff_programs(request.user), writable_programs(request.user)
+
+    def get_queryset(self, request):
+        visible, _ = self._programs_for(request)
+        return super().get_queryset(request).for_programs(visible)
+
+    def _can_write(self, request, obj):
+        from core.authz import program_of
+
+        _, writable = self._programs_for(request)
+        if obj is None:
+            return writable.exists()
+        program = program_of(obj, self._program_lookup())
+        return program is not None and writable.filter(pk=program.pk).exists()
+
+    def has_add_permission(self, request):
+        return super().has_add_permission(request) and self._can_write(request, None)
+
+    def has_change_permission(self, request, obj=None):
+        return super().has_change_permission(request, obj) and self._can_write(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        return super().has_delete_permission(request, obj) and self._can_write(request, obj)
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        related = db_field.remote_field.model
+        manager = related._default_manager
+        if hasattr(manager, "for_programs"):
+            _, writable = self._programs_for(request)
+            kwargs["queryset"] = manager.for_programs(writable)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+    def get_search_results(self, request, queryset, search_term):
+        # Autocomplete pickers on other screens see the same rows as the list.
+        queryset, distinct = super().get_search_results(request, queryset, search_term)
+        return queryset, distinct
+
+    def save_model(self, request, obj, form, change):
+        from django.core.exceptions import PermissionDenied
+
+        if not self._can_write(request, obj):
+            raise PermissionDenied("Not your program.")
+        super().save_model(request, obj, form, change)

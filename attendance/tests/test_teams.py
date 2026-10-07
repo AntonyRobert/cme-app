@@ -27,6 +27,7 @@ from credits.rules import credit_breakdown
 from credits.tests.factories import evaluate
 from people.models import PersonEmail
 from people.tests.factories import make_person, make_staff
+from programs.tests.factories import make_program
 from rounds.models import RoundsEvent, Session
 
 FIXTURE = Path(__file__).parent / "fixtures" / "teams-export-2026-09-10.csv"
@@ -40,6 +41,7 @@ def local(hour, minute, second=0, day=10, month=9):
 
 def make_fixture_event(date=datetime.date(2026, 9, 10), title=TITLE, start_hour=9):
     event = RoundsEvent.objects.create(
+        program=make_program(),
         date=date,
         start_at=datetime.datetime.combine(date, datetime.time(start_hour), tzinfo=MONTREAL),
         end_at=datetime.datetime.combine(date, datetime.time(start_hour + 3), tzinfo=MONTREAL),

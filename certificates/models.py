@@ -5,12 +5,18 @@ from django.db.models import F, Q
 from django.utils import timezone
 
 from attendance.aggregation import MinutesSource
+from core.authz import ProgramScopedQuerySet
 from core.models import AppendOnlyMixin, FrozenFieldsMixin, UUIDModel
 from people.models import Person
 from people.ownership import PersonOwnedQuerySet
+from programs.models import Program
 from rounds.models import RoundsEvent
 
 from .rules import ATTENDANCE, CME, generate_verification_code
+
+
+class CertificateQuerySet(PersonOwnedQuerySet, ProgramScopedQuerySet):
+    program_lookup = "program"
 
 
 class Certificate(FrozenFieldsMixin, UUIDModel):
@@ -27,6 +33,9 @@ class Certificate(FrozenFieldsMixin, UUIDModel):
         ATTENDANCE = ATTENDANCE, "Attendance certificate"
 
     FROZEN_FIELDS = (
+        "program",
+        "program_name",
+        "institution_name",
         "certificate_type",
         "period_start",
         "period_end",
@@ -47,6 +56,10 @@ class Certificate(FrozenFieldsMixin, UUIDModel):
     )
 
     person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="certificates")
+    # One certificate per program: a person attending two collects two.
+    program = models.ForeignKey(Program, on_delete=models.PROTECT, related_name="certificates")
+    program_name = models.CharField(max_length=200, help_text="Snapshotted. Programs get renamed.")
+    institution_name = models.CharField(max_length=200, help_text="Snapshotted.")
     certificate_type = models.CharField(max_length=20, choices=Type.choices)
     period_start = models.DateField()
     period_end = models.DateField()
@@ -89,7 +102,7 @@ class Certificate(FrozenFieldsMixin, UUIDModel):
     revoked_at = models.DateTimeField(null=True, blank=True)
     revoked_reason = models.TextField(blank=True)
 
-    objects = PersonOwnedQuerySet.as_manager()
+    objects = CertificateQuerySet.as_manager()
 
     class Meta:
         ordering = ["-issued_at"]
@@ -131,8 +144,9 @@ class Certificate(FrozenFieldsMixin, UUIDModel):
         return hasattr(self, "superseded_by")
 
 
-class CertificateLineQuerySet(PersonOwnedQuerySet):
+class CertificateLineQuerySet(PersonOwnedQuerySet, ProgramScopedQuerySet):
     person_lookup = "certificate__person"
+    program_lookup = "certificate__program"
 
 
 class CertificateLine(AppendOnlyMixin, UUIDModel):
@@ -151,12 +165,15 @@ class CertificateLine(AppendOnlyMixin, UUIDModel):
     session_titles = models.JSONField(default=list, help_text="Print-only snapshot.")
     attended_minutes = models.PositiveIntegerField()
     minutes_source = models.CharField(max_length=20, choices=MinutesSource.choices)
+    # The program's rate AT ISSUE. A later rate change never touches this line.
+    attendance_rate_per_hour = models.DecimalField(max_digits=4, decimal_places=2, default=1)
     attendance_computed = models.DecimalField(max_digits=5, decimal_places=2)
     attendance_adjustment = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     attendance_credits = models.DecimalField(max_digits=5, decimal_places=2)
     # Teaching: the sessions presented.
     presented_session_titles = models.JSONField(default=list, help_text="Print-only snapshot.")
     teaching_minutes = models.PositiveIntegerField(default=0)
+    teaching_rate_per_hour = models.DecimalField(max_digits=4, decimal_places=2, default=1)
     teaching_computed = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     teaching_adjustment = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     teaching_credits = models.DecimalField(max_digits=5, decimal_places=2, default=0)

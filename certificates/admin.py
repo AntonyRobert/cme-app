@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from core.admin import ReadOnlyAdmin, admin_link
+from core.admin import ProgramScopedAdminMixin, ReadOnlyAdmin, admin_link
 
 from .models import Certificate, CertificateLine
 
@@ -47,15 +47,17 @@ class StateFilter(admin.SimpleListFilter):
 
 
 @admin.register(Certificate)
-class CertificateAdmin(ReadOnlyAdmin):
+class CertificateAdmin(ProgramScopedAdminMixin, ReadOnlyAdmin):
     """
     View only. Certificates are snapshots: they are issued, reissued or
     revoked by the application, never edited. Issuing arrives with the PDF.
     """
 
+    admin_only_writes = True
     list_display = [
         "verification_code",
         "recipient_name",
+        "program",
         "certificate_type",
         "period_start",
         "period_end",
@@ -65,7 +67,7 @@ class CertificateAdmin(ReadOnlyAdmin):
         "issued_at",
         "state",
     ]
-    list_filter = [StateFilter, "certificate_type", "period_end"]
+    list_filter = ["program", StateFilter, "certificate_type", "period_end"]
     date_hierarchy = "issued_at"
     search_fields = [
         "verification_code",

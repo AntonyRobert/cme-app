@@ -19,6 +19,8 @@ from rounds.models import (
     coi_questions,
 )
 
+from programs.tests.factories import make_program
+
 from .factories import at, make_event, make_session
 
 pytestmark = pytest.mark.django_db
@@ -27,9 +29,14 @@ pytestmark = pytest.mark.django_db
 # --- Events ------------------------------------------------------------------
 
 
-def test_title_defaults_to_the_series_name(settings):
-    settings.SERIES_NAME = "Test Rounds"
-    assert make_event().title == "Test Rounds"
+def test_title_and_credits_default_from_the_program():
+    program = make_program("Named Program", series_name="Test Rounds",
+                           default_accredited_credits=Decimal("2.50"))
+    event = RoundsEvent(program=program, start_at=at(0))
+    event.full_clean()
+    event.save()
+    assert (event.title, event.accredited_credits) == ("Test Rounds", Decimal("2.50"))
+    assert make_event(program=program, credits="1.00").accredited_credits == Decimal("1.00")
 
 
 def test_a_session_ends_an_hour_after_it_starts_by_default():
@@ -42,7 +49,7 @@ def test_a_session_ends_an_hour_after_it_starts_by_default():
 
 
 def test_an_event_fills_in_its_end_and_date_from_its_start():
-    event = RoundsEvent(start_at=at(0), accredited_credits=Decimal("3.00"))
+    event = RoundsEvent(program=make_program(), start_at=at(0), accredited_credits=Decimal("3.00"))
     event.full_clean()
     event.save()
     assert event.end_at == at(180)
@@ -189,6 +196,7 @@ NOW = datetime.datetime(2026, 10, 6, 15, 0, tzinfo=datetime.timezone.utc)
 
 def declare_none(person, **kwargs):
     kwargs.setdefault("declared_at", NOW)
+    kwargs.setdefault("version", "2026-10")
     return declare_no_conflicts(person, **kwargs)
 
 
@@ -196,6 +204,7 @@ def declare_some(person, **kwargs):
     answers = {key: (False, "") for key, _ in coi_questions("2026-10")}
     answers["consulting"] = (True, "Advisory board, Acme Devices")
     kwargs.setdefault("declared_at", NOW)
+    kwargs.setdefault("version", "2026-10")
     return declare(person, answers, **kwargs)
 
 
@@ -221,7 +230,7 @@ def test_an_incomplete_declaration_is_rejected():
     answers = {key: (False, "") for key, _ in coi_questions("2026-10")}
     del answers["employment"]
     with pytest.raises(ValidationError) as err:
-        declare(person, answers)
+        declare(person, answers, version="2026-10")
     assert "employment" in err.value.message_dict
     assert COIDeclaration.objects.filter(person=person).count() == 0  # nothing half-written
 
@@ -231,7 +240,7 @@ def test_an_answer_to_an_unknown_question_is_rejected():
     answers = {key: (False, "") for key, _ in coi_questions("2026-10")}
     answers["lottery_wins"] = (False, "")
     with pytest.raises(ValidationError) as err:
-        declare(person, answers)
+        declare(person, answers, version="2026-10")
     assert "lottery_wins" in err.value.message_dict
 
 
@@ -240,7 +249,7 @@ def test_a_yes_without_details_is_rejected():
     answers = {key: (False, "") for key, _ in coi_questions("2026-10")}
     answers["speaker_fees"] = (True, "   ")
     with pytest.raises(ValidationError) as err:
-        declare(person, answers)
+        declare(person, answers, version="2026-10")
     assert "speaker_fees" in err.value.message_dict
     with pytest.raises(IntegrityError), transaction.atomic():
         COIResponse.objects.create(
@@ -269,9 +278,8 @@ def test_an_old_declaration_renders_with_its_own_versions_wording(settings):
             ("gifts", "Gifts or hospitality"),  # new question
         ],
     }
-    settings.COI_CURRENT_VERSION = "2027-01"
     old = declare_none(make_person(), version="2026-10")
-    new = declare_no_conflicts(make_person())
+    new = declare_no_conflicts(make_person(), version="2027-01")  # a program moved to it
     assert [text for text, _, _ in old.rendered()][0] == "Research funding or grants"
     assert len(old.rendered()) == 7
     assert old.is_complete  # judged against its own version, not the current one

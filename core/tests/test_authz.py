@@ -77,3 +77,49 @@ class TestOwnedObject:
         Person.objects.filter(pk=duplicate.pk).update(merged_into=survivor)
         row = PersonEmail.objects.get(email="dup@mcgill.ca")
         assert get_owned_or_404(PersonEmail, row.pk, survivor) == row
+
+
+@pytest.mark.django_db
+class TestProgramScoped:
+    """The staff twin of @owned_object: scoped to the programs the user holds a role in."""
+
+    def request_as(self, user):
+        from django.contrib.auth.models import AnonymousUser
+
+        request = RequestFactory().get("/")
+        request.user = user or AnonymousUser()
+        return request
+
+    def test_staff_with_a_role_in_the_program_get_the_object(self):
+        from django.contrib.auth import get_user_model
+
+        from programs.tests.factories import give_role, make_program
+        from rounds.tests.factories import make_event
+
+        program = make_program("Scoped")
+        event = make_event(program=program, title="Scoped rounds")
+        user = get_user_model().objects.create_user(username="s", is_staff=True)
+        give_role(user, program)
+        response = urls_fixture.event_detail(self.request_as(user), id=event.pk)
+        assert response.content == b"Scoped rounds"
+
+    def test_staff_without_a_role_there_get_404(self):
+        from django.contrib.auth import get_user_model
+
+        from programs.tests.factories import give_role, make_program
+        from rounds.tests.factories import make_event
+
+        event = make_event(program=make_program("Theirs"))
+        user = get_user_model().objects.create_user(username="s", is_staff=True)
+        give_role(user, make_program("Mine"))
+        with pytest.raises(Http404):
+            urls_fixture.event_detail(self.request_as(user), id=event.pk)
+
+    def test_non_staff_get_403(self):
+        from django.core.exceptions import PermissionDenied
+
+        from rounds.tests.factories import make_event
+
+        event = make_event()
+        with pytest.raises(PermissionDenied):
+            urls_fixture.event_detail(self.request_as(None), id=event.pk)

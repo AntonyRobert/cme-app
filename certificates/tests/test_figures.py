@@ -8,6 +8,7 @@ from attendance.tests.factories import teams_row
 from certificates.figures import CertificateFigures, LineFigures, certificate_figures
 from credits.tests.factories import evaluate
 from people.tests.factories import make_person
+from programs.tests.factories import make_program
 from rounds.models import SessionPresenter
 from rounds.tests.factories import EVENT_START, make_event, make_session
 
@@ -36,7 +37,7 @@ def test_a_presenter_who_also_attends_gets_both_kinds_on_separate_lines():
     teams_row(second_event, person, two_weeks, two_weeks + 59)
     evaluate(person, b1)
 
-    figures = certificate_figures(person, *YEAR)
+    figures = certificate_figures(person, make_program(), *YEAR)
 
     first, second = figures.lines
     assert (first.attendance_credits, first.teaching_credits) == (D("2.00"), D("1.00"))
@@ -59,8 +60,9 @@ def test_a_line_has_no_single_blended_credit_figure():
 def line(attendance, teaching):
     return LineFigures(
         event=None, event_title="", event_date=None, session_titles=[], attended_minutes=0,
-        minutes_source=None, attendance_computed=D(attendance), attendance_adjustment=D("0"),
-        attendance_credits=D(attendance), presented_session_titles=[], teaching_minutes=0,
+        minutes_source=None, attendance_rate_per_hour=D("1"), attendance_computed=D(attendance),
+        attendance_adjustment=D("0"), attendance_credits=D(attendance),
+        presented_session_titles=[], teaching_minutes=0, teaching_rate_per_hour=D("1"),
         teaching_computed=D(teaching), teaching_adjustment=D("0"), teaching_credits=D(teaching),
     )
 
@@ -75,12 +77,12 @@ def test_events_with_no_credit_of_either_kind_are_left_off():
     person = make_person()
     event, talks = three_talks()
     teams_row(event, person, 0, 180)  # attended, evaluated nothing
-    assert certificate_figures(person, *YEAR).lines == []
+    assert certificate_figures(person, make_program(), *YEAR).lines == []
 
 
 def test_events_outside_the_period_are_left_off():
     person = make_person()
     event, (a1, _, _) = three_talks()
     SessionPresenter.objects.create(session=a1, person=person)
-    assert len(certificate_figures(person, *YEAR).lines) == 1
-    assert certificate_figures(person, datetime.date(2027, 1, 1), datetime.date(2027, 12, 31)).lines == []
+    assert len(certificate_figures(person, make_program(), *YEAR).lines) == 1
+    assert certificate_figures(person, make_program(), datetime.date(2027, 1, 1), datetime.date(2027, 12, 31)).lines == []

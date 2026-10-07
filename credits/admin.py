@@ -1,7 +1,13 @@
 from django.contrib import admin, messages
 
 from audit.log import record
-from core.admin import AppendOnlyAdmin, BaseAdmin, NoDeleteMixin, SafeModelForm
+from core.admin import (
+    AppendOnlyAdmin,
+    BaseAdmin,
+    NoDeleteMixin,
+    ProgramScopedAdminMixin,
+    SafeModelForm,
+)
 
 from .models import CreditAdjustment, EvaluationResponse, EvaluationSubmission, EvaluationWindow
 from .windows import ReopeningRefused, request_reopening
@@ -27,7 +33,7 @@ class EvaluationResponseInline(admin.TabularInline):
 
 
 @admin.register(EvaluationSubmission)
-class EvaluationSubmissionAdmin(BaseAdmin):
+class EvaluationSubmissionAdmin(ProgramScopedAdminMixin, BaseAdmin):
     """
     Evaluations normally come from the attendee's own form. Entering,
     editing or deleting one here is staff acting on their behalf, and is
@@ -41,7 +47,8 @@ class EvaluationSubmissionAdmin(BaseAdmin):
         "self_reported_session_minutes",
         "is_complete",
     ]
-    list_filter = ["is_complete", "session__event"]
+    admin_only_writes = True
+    list_filter = ["session__event__program", "is_complete", "session__event"]
     date_hierarchy = "session__event__date"
     search_fields = ["person__family_name", "person__given_name", "session__title"]
     list_select_related = ["person", "session__event"]
@@ -95,7 +102,7 @@ class WindowForm(SafeModelForm):
 
 
 @admin.register(EvaluationWindow)
-class EvaluationWindowAdmin(NoDeleteMixin, BaseAdmin):
+class EvaluationWindowAdmin(ProgramScopedAdminMixin, NoDeleteMixin, BaseAdmin):
     """
     Reopen an evaluation form for one person and one session.
 
@@ -104,8 +111,9 @@ class EvaluationWindowAdmin(NoDeleteMixin, BaseAdmin):
     and is logged against you.
     """
 
+    admin_only_writes = True
     list_display = ["person", "session", "opened_at", "expires_at", "closed_at", "granted_by", "state"]
-    list_filter = ["session__event"]
+    list_filter = ["session__event__program", "session__event"]
     date_hierarchy = "opened_at"
     search_fields = ["person__family_name", "person__given_name", "session__title", "reason"]
     list_select_related = ["person", "session__event", "granted_by"]
@@ -163,14 +171,15 @@ class EvaluationWindowAdmin(NoDeleteMixin, BaseAdmin):
 
 
 @admin.register(CreditAdjustment)
-class CreditAdjustmentAdmin(AppendOnlyAdmin):
+class CreditAdjustmentAdmin(ProgramScopedAdminMixin, AppendOnlyAdmin):
     """
     Add-only ledger. Use it when the hours are right and the credit still
     isn't. If the hours are wrong, correct the attendance instead.
     """
 
     list_display = ["person", "event", "kind", "delta_credits", "short_reason", "created_by", "created_at"]
-    list_filter = ["kind", "event"]
+    admin_only_writes = True
+    list_filter = ["event__program", "kind", "event"]
     date_hierarchy = "created_at"
     search_fields = ["person__family_name", "person__given_name", "reason"]
     list_select_related = ["person", "event", "created_by"]

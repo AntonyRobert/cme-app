@@ -545,6 +545,7 @@ def test_a_closed_event_cannot_be_reopened_from_the_admin(client, boss, seeded):
     response = client.post(
         url(RoundsEvent, "change", first.pk),
         {
+            "program": first.program.pk,
             "title": first.title,
             "date": first.date.isoformat(),
             "status": "draft",
@@ -598,6 +599,7 @@ def test_adding_an_event_needs_only_a_start_and_three_titles(client, boss, seede
     response = client.post(
         url(RoundsEvent, "add"),
         {
+            "program": seeded[0].program.pk,
             "title": "Health Informatics Rounds",
             "date": "",
             "status": "draft",
@@ -636,6 +638,7 @@ def test_an_empty_session_row_is_ignored_and_a_given_time_is_kept(client, boss, 
     response = client.post(
         url(RoundsEvent, "add"),
         {
+            "program": seeded[0].program.pk,
             "title": "Short rounds",
             "status": "draft",
             "accredited_credits": "2.00",
@@ -700,6 +703,7 @@ def test_positions_number_themselves(client, boss, seeded):
     response = client.post(
         url(RoundsEvent, "add"),
         {
+            "program": seeded[0].program.pk,
             "title": "Numbered for me",
             "status": "draft",
             "accredited_credits": "3.00",

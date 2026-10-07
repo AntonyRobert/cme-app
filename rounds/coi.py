@@ -7,7 +7,6 @@ any category" is written as an explicit no to each question, never left
 blank. An unanswered declaration and an attested-no declaration must be
 distinguishable, and they are: the first has no responses.
 """
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
@@ -18,16 +17,16 @@ from .models import COIDeclaration, COIResponse, coi_questions
 
 
 @transaction.atomic
-def declare(person, answers, *, version=None, declared_at=None, user=None, request=None):
+def declare(person, answers, *, version, declared_at=None, user=None, request=None):
     """
-    Record a complete declaration.
+    Record a complete declaration under questionnaire `version` (normally the
+    program's `coi_question_version`).
 
     `answers` maps every question_key of `version` to (has_conflict, details).
     Missing or unknown keys, and a yes without details, are refused as a
     ValidationError; nothing is written. The audit entry names the staff
     user if one entered it on the person's behalf, else the person.
     """
-    version = version or settings.COI_CURRENT_VERSION
     questions = coi_questions(version)
     expected = {key for key, _ in questions}
     given = set(answers)
@@ -72,8 +71,7 @@ def declare(person, answers, *, version=None, declared_at=None, user=None, reque
     return declaration
 
 
-def declare_no_conflicts(person, *, version=None, **kwargs):
+def declare_no_conflicts(person, *, version, **kwargs):
     """An explicit no to every question of the version."""
-    version = version or settings.COI_CURRENT_VERSION
     answers = {key: (False, "") for key, _ in coi_questions(version)}
     return declare(person, answers, version=version, **kwargs)

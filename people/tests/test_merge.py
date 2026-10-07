@@ -82,11 +82,14 @@ def test_every_kind_of_row_follows_the_merge(pair, staff):
     first, second = make_session(event), make_session(event)
     attendance = teams_row(event, duplicate, 0, 60)
     evaluation = evaluate(duplicate, first)
-    declaration = declare_no_conflicts(duplicate)
+    declaration = declare_no_conflicts(duplicate, version="2026-10")
     presenting = SessionPresenter.objects.create(session=second, person=duplicate)
     adjustment = adjust(duplicate, event, "0.25")
     certificate = Certificate.objects.create(
         person=duplicate,
+        program=event.program,
+        program_name=event.program.name,
+        institution_name=event.program.institution.name,
         certificate_type="cme",
         period_start=datetime.date(2026, 1, 1),
         period_end=datetime.date(2026, 12, 31),

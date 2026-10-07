@@ -195,13 +195,19 @@ def test_an_already_evaluated_session_is_not_reopened(session, person, clock):
         ((6, 30), datetime.date(2027, 7, 1), datetime.date(2028, 6, 30)),
     ],
 )
-def test_accreditation_year_end_is_a_setting(settings, year_end, day, expected):
-    settings.ACCREDITATION_YEAR_END = year_end
-    assert accreditation_year_end(day) == expected
+def test_accreditation_year_end_is_per_program(year_end, day, expected):
+    from programs.tests.factories import make_program
+
+    program = make_program(
+        "Year end", accreditation_year_end_month=year_end[0], accreditation_year_end_day=year_end[1]
+    )
+    assert program.accreditation_year_end(day) == expected
 
 
-def test_no_self_service_reopening_past_the_accreditation_year(session, person, clock, settings):
-    settings.ACCREDITATION_YEAR_END = (12, 31)
+def test_no_self_service_reopening_past_the_accreditation_year(session, person, clock):
+    program = session.event.program
+    program.accreditation_year_end_month, program.accreditation_year_end_day = 12, 31
+    program.save()
     clock(local(2026, 12, 31, 23, 0))
     request_reopening(person, session)  # the last day still counts
     clock(local(2027, 1, 2))

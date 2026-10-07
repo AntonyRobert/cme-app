@@ -27,10 +27,17 @@ FRAUD_SURFACE = {
 }
 
 
-def staff_in(role, client=None):
+ROLE_FOR_GROUP = {COORDINATOR: "coordinator", PROGRAM_ADMIN: "program_admin", READ_ONLY: "read_only"}
+
+
+def staff_in(role, client=None, program=None):
+    """A staff user holding `role` in `program` (the shared default program)."""
+    from programs.tests.factories import give_role, make_program
+
     user = get_user_model().objects.create_user(username=role.lower().replace(" ", "-"), is_staff=True)
-    user.groups.add(Group.objects.get(name=role))
+    give_role(user, program or make_program(), ROLE_FOR_GROUP[role])  # syncs the groups
     user = get_user_model().objects.get(pk=user.pk)  # drop the permission cache
+    assert user.groups.filter(name=role).exists()
     if client is not None:
         client.force_login(user)
     return user

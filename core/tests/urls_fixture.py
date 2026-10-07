@@ -2,8 +2,9 @@
 from django.http import HttpResponse
 from django.urls import include, path
 
-from core.authz import owned_object, public_object
+from core.authz import owned_object, program_scoped, public_object
 from people.models import PersonEmail
+from rounds.models import RoundsEvent
 
 
 def plain(request, **kwargs):
@@ -20,9 +21,15 @@ def verify(request, code):
     return HttpResponse(code)
 
 
+@program_scoped(RoundsEvent)
+def event_detail(request, obj):
+    return HttpResponse(obj.title)
+
+
 good_patterns = [
     path("no-params/", plain),
     path("emails/<uuid:id>/", email_detail),
+    path("staff/events/<uuid:id>/", event_detail),
     path("verify/<str:code>/", verify),
 ]
 

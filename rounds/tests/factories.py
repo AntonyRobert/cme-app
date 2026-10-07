@@ -2,6 +2,7 @@ import datetime
 import itertools
 from decimal import Decimal
 
+from programs.tests.factories import make_program
 from rounds.models import RoundsEvent, Session
 
 _counter = itertools.count(1)
@@ -16,13 +17,15 @@ def at(minutes):
     return EVENT_START + datetime.timedelta(minutes=minutes)
 
 
-def make_event(start=EVENT_START, minutes=60, credits="1.00", sessions=1, **extra):
+def make_event(start=EVENT_START, minutes=60, credits="1.00", sessions=1, program=None, **extra):
     """
     An event of `minutes`. By default it has one session spanning the whole
     event, so attendance tests can think in event minutes. Pass sessions=0
-    and add your own with make_session for a multi-session event.
+    and add your own with make_session for a multi-session event. Without a
+    program, the shared default program is used.
     """
     event = RoundsEvent.objects.create(
+        program=program or make_program(),
         date=start.date(),
         start_at=start,
         end_at=start + datetime.timedelta(minutes=minutes),

@@ -15,6 +15,7 @@ from certificates.rules import (
 from core.models import ImmutableRowError
 from people.models import Person
 from people.tests.factories import make_person, make_staff
+from programs.tests.factories import make_program
 from rounds.tests.factories import make_event
 
 pytestmark = pytest.mark.django_db
@@ -22,8 +23,12 @@ pytestmark = pytest.mark.django_db
 
 def issue(person=None, **extra):
     person = person or make_person(given="Ada", family="Lovelace")
+    program = extra.pop("program", None) or make_program()
     return Certificate.objects.create(
         person=person,
+        program=program,
+        program_name=program.name,
+        institution_name=program.institution.name,
         certificate_type=certificate_type_for(person),
         period_start=datetime.date(2026, 1, 1),
         period_end=datetime.date(2026, 12, 31),

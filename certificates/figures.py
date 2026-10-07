@@ -24,11 +24,13 @@ class LineFigures:
     session_titles: list  # sessions attended (half or more), not presented
     attended_minutes: int  # minutes in sessions they did not present
     minutes_source: str | None
+    attendance_rate_per_hour: Decimal  # the program's rate at the time, snapshotted
     attendance_computed: Decimal
     attendance_adjustment: Decimal
     attendance_credits: Decimal
     presented_session_titles: list
     teaching_minutes: int
+    teaching_rate_per_hour: Decimal
     teaching_computed: Decimal
     teaching_adjustment: Decimal
     teaching_credits: Decimal
@@ -54,10 +56,16 @@ class CertificateFigures:
         return self.attendance_credits + self.teaching_credits
 
 
-def certificate_figures(person, period_start, period_end):
-    """The figures a certificate for this person and period would print."""
+def certificate_figures(person, program, period_start, period_end):
+    """
+    The figures a certificate for this person, program and period would
+    print. One certificate per program: events of other programs are not
+    on it.
+    """
     lines = []
-    for event in person_events(person).filter(date__gte=period_start, date__lte=period_end):
+    for event in person_events(person).filter(
+        program=program, date__gte=period_start, date__lte=period_end
+    ):
         b = credit_breakdown(person, event)
         if not (b.attendance_credits or b.teaching_credits):
             continue
@@ -69,11 +77,13 @@ def certificate_figures(person, period_start, period_end):
                 session_titles=[s.title for s in b.sessions_attended],
                 attended_minutes=sum(s.minutes for s in b.sessions if not s.presented),
                 minutes_source=b.source,
+                attendance_rate_per_hour=b.attendance_rate_per_hour,
                 attendance_computed=b.attendance_computed,
                 attendance_adjustment=b.attendance_adjustment,
                 attendance_credits=b.attendance_credits,
                 presented_session_titles=[s.title for s in b.sessions_presented],
                 teaching_minutes=b.teaching_minutes,
+                teaching_rate_per_hour=b.teaching_rate_per_hour,
                 teaching_computed=b.teaching_computed,
                 teaching_adjustment=b.teaching_adjustment,
                 teaching_credits=b.teaching_credits,

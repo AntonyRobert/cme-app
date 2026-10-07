@@ -4,10 +4,15 @@ from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
 
+from core.authz import ProgramScopedQuerySet
 from core.models import AppendOnlyMixin, FrozenFieldsMixin, UUIDModel
 from people.models import Person
 from people.ownership import PersonOwnedQuerySet
 from rounds.models import RoundsEvent, Session
+
+
+class AttendanceUploadQuerySet(ProgramScopedQuerySet):
+    program_lookup = "event__program"
 
 
 class AttendanceUpload(FrozenFieldsMixin, UUIDModel):
@@ -47,6 +52,8 @@ class AttendanceUpload(FrozenFieldsMixin, UUIDModel):
         "disagreeing with its rows.",
     )
 
+    objects = AttendanceUploadQuerySet.as_manager()
+
     class Meta:
         ordering = ["-uploaded_at"]
 
@@ -54,7 +61,9 @@ class AttendanceUpload(FrozenFieldsMixin, UUIDModel):
         return f"{self.original_filename} ({self.event.date})"
 
 
-class AttendanceRecordQuerySet(PersonOwnedQuerySet):
+class AttendanceRecordQuerySet(PersonOwnedQuerySet, ProgramScopedQuerySet):
+    program_lookup = "event__program"
+
     def active(self):
         """Rows that count: everything no correction has replaced."""
         return self.filter(supersession__isnull=True)

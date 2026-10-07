@@ -28,6 +28,7 @@ def test_swapping_two_sessions_on_the_event_page(client, boss):
     second = make_session(event, minutes=60, title="Second")
     local = lambda v: v.astimezone().strftime("%H:%M:%S")
     data = {
+        "program": event.program.pk,
         "title": event.title, "date": event.date.isoformat(), "status": "draft",
         "accredited_credits": "2.00",
         "start_at_0": event.start_at.astimezone().date().isoformat(), "start_at_1": local(event.start_at),

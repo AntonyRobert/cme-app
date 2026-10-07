@@ -24,6 +24,7 @@ from audit.log import record
 from credits.models import CreditAdjustment, EvaluationResponse, EvaluationSubmission
 from credits.windows import request_reopening
 from people.models import AllowedDomain, Person, PersonEmail
+from programs.models import Institution, Program
 from rounds.coi import declare
 from rounds.models import (
     LearningObjective,
@@ -96,6 +97,7 @@ class Command(BaseCommand):
         day = timezone.localdate() - datetime.timedelta(days=days_ago)
         start = datetime.datetime.combine(day, datetime.time(12, 0), tzinfo=zone)
         return RoundsEvent.objects.create(
+            program=self.program,
             date=day,
             start_at=start,
             end_at=start + datetime.timedelta(minutes=180 + ran_over_minutes),
@@ -125,10 +127,13 @@ class Command(BaseCommand):
 
     def declare(self, person, conflicts=None):
         """A declaration made 40 days ago: no to everything, or yes where `conflicts` says."""
-        answers = {key: (False, "") for key, _ in coi_questions(settings.COI_CURRENT_VERSION)}
+        version = self.program.coi_question_version
+        answers = {key: (False, "") for key, _ in coi_questions(version)}
         for key, details in (conflicts or {}).items():
             answers[key] = (True, details)
-        return declare(person, answers, declared_at=timezone.now() - datetime.timedelta(days=40))
+        return declare(
+            person, answers, version=version, declared_at=timezone.now() - datetime.timedelta(days=40)
+        )
 
     def teams(self, event, upload, name, start, end, person=None, email=None, role="Attendee"):
         """A Teams join from `start` to `end` minutes after noon."""
@@ -195,6 +200,16 @@ class Command(BaseCommand):
         )
         self.staff.set_unusable_password()
         self.staff.save()
+
+        # One institution, three programs. The demo events belong to the first.
+        mcgill, _ = Institution.objects.get_or_create(
+            short_name="mcgill", defaults={"name": "McGill University"}
+        )
+        self.program, _ = Program.objects.get_or_create(
+            institution=mcgill, slug="em", defaults={"name": "Emergency Medicine"}
+        )
+        for name, slug in (("Internal Medicine", "im"), ("General Surgery", "gs")):
+            Program.objects.get_or_create(institution=mcgill, slug=slug, defaults={"name": name})
 
         AllowedDomain.objects.create(domain="mcgill.ca", note="University")
         AllowedDomain.objects.create(domain="muhc.mcgill.ca", note="MUHC")

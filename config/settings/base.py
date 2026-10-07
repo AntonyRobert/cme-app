@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "core",
     "accounts",
+    "programs",
     "people",
     "rounds",
     "attendance",
@@ -127,7 +128,9 @@ SERVER_EMAIL = DEFAULT_FROM_EMAIL
 # Raw Teams exports and issued PDFs. Never served by Django or Caddy.
 UPLOAD_ROOT = Path(env("UPLOAD_ROOT", str(BASE_DIR / "uploads"))).resolve()
 
-# Default title for a RoundsEvent. Prints on certificate lines.
+# Defaults for a NEW program. Each program carries its own copy of these
+# (programs.Program), editable by that program's admins; nothing reads these
+# settings at run time except as the default when a program is created.
 SERIES_NAME = "Health Informatics Rounds"
 
 # Conflict-of-interest questionnaire, by version. A declaration records the
@@ -151,15 +154,11 @@ COI_CURRENT_VERSION = "2026-10"
 # A declaration is valid for this long after it was made, rolling.
 COI_VALIDITY_DAYS = 365
 
-# Credits per hour, by kind. Tracked and reported separately even while the
-# rates are equal: a blended figure can't be split later.
-CREDIT_RATES_PER_HOUR = {"attendance": "1.0", "teaching": "1.0"}
 
 # The evaluation form is open this many days after the event date, and a
 # reopening lasts this long again.
 EVALUATION_WINDOW_DAYS = 7
 # Self-service reopenings per person per session. Program admins can override.
 EVALUATION_REOPENINGS_MAX = 3
-# (month, day) the accreditation year ends. No self-service reopening past
-# the end of the year that contains the event.
+# (month, day) a new program's accreditation year ends. Per program after that.
 ACCREDITATION_YEAR_END = (12, 31)

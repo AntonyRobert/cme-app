@@ -4,8 +4,8 @@ When an evaluation may be submitted.
 The default window is EVALUATION_WINDOW_DAYS after the event date. After
 that, an attendee may request a reopening, which is granted automatically
 (up to EVALUATION_REOPENINGS_MAX times) and never past the end of the
-accreditation year that contains the event. Program admins can override
-both limits; every grant is audit-logged.
+program's accreditation year that contains the event. Program admins can
+override both limits; every grant is audit-logged.
 """
 import datetime
 from zoneinfo import ZoneInfo
@@ -33,11 +33,10 @@ def _zone():
     return ZoneInfo(settings.TIME_ZONE)
 
 
-def accreditation_year_end(day):
-    """The last day of the accreditation year that contains `day`."""
-    month, day_of_month = settings.ACCREDITATION_YEAR_END
-    end = datetime.date(day.year, month, day_of_month)
-    return end if end >= day else datetime.date(day.year + 1, month, day_of_month)
+def accreditation_year_end(session):
+    """The last day of the program's accreditation year that contains the event."""
+    event = session.event
+    return event.program.accreditation_year_end(event.date)
 
 
 def default_window(session):
@@ -94,7 +93,7 @@ def request_reopening(person, session, *, reason="", user=None, override=False, 
     if is_evaluated(person, session):
         raise ReopeningRefused("This session has already been evaluated.")
     if not override:
-        year_end = accreditation_year_end(session.event.date)
+        year_end = accreditation_year_end(session)
         if timezone.localdate(at) > year_end:
             raise ReopeningRefused(
                 f"The accreditation year for this event ended on {year_end:%d %B %Y}. "
@@ -148,7 +147,7 @@ def window_state(person, session, at=None):
         return STATE_OPEN
     if open_reopening(person, session, at) is not None:
         return STATE_REOPENED
-    if timezone.localdate(at) > accreditation_year_end(session.event.date):
+    if timezone.localdate(at) > accreditation_year_end(session):
         return STATE_PAST_YEAR_END
     if reopenings_used(person, session) >= settings.EVALUATION_REOPENINGS_MAX:
         return STATE_LIMIT_REACHED

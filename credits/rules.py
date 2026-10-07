@@ -21,7 +21,6 @@ attendance rows is a screen-sharing permission and is never read here.
 from dataclasses import dataclass, field
 from decimal import ROUND_FLOOR, Decimal
 
-from django.conf import settings
 from django.db.models import Sum
 
 from attendance.aggregation import MinutesSource, attended_minutes
@@ -43,15 +42,16 @@ REVIEW_SELF_REPORTED_ONLY = "self-reported only"
 REVIEW_OVER_SESSION_LENGTH = "rows add up to more than a session lasted (duplicate manual row?)"
 
 
-def rate_per_hour(kind):
-    """Credits per hour for a kind of credit, from settings."""
-    return Decimal(str(settings.CREDIT_RATES_PER_HOUR[kind]))
+def rate_per_hour(program, kind):
+    """Credits per hour for a kind of credit, from the program's own row."""
+    if kind == TEACHING:
+        return Decimal(program.teaching_rate_per_hour)
+    return Decimal(program.attendance_rate_per_hour)
 
 
-def credits_for_minutes(minutes, kind=ATTENDANCE):
+def credits_for_minutes(minutes, rate=Decimal("1")):
     """
-    Credit is hours times the kind's rate: minutes / 60 * rate, to the
-    hundredth.
+    Credit is hours times the rate: minutes / 60 * rate, to the hundredth.
 
     59 minutes of a 60-minute talk is 0.98 at a rate of 1. No rounding to a
     quarter. The only rounding is to two decimal places, and that is
@@ -59,7 +59,7 @@ def credits_for_minutes(minutes, kind=ATTENDANCE):
     """
     if minutes <= 0:
         return ZERO
-    return (Decimal(minutes) / 60 * rate_per_hour(kind)).quantize(ZERO, rounding=ROUND_FLOOR)
+    return (Decimal(minutes) / 60 * Decimal(rate)).quantize(ZERO, rounding=ROUND_FLOOR)
 
 
 def evaluation_gate(person, session):
@@ -123,6 +123,9 @@ class CreditBreakdown:
 
     sessions: list = field(default_factory=list)  # SessionCredit, in session order
     source: str | None = None
+    # The program's rates when this was computed; what a certificate line snapshots.
+    attendance_rate_per_hour: Decimal = Decimal("1.00")
+    teaching_rate_per_hour: Decimal = Decimal("1.00")
     attendance_computed: Decimal = ZERO
     attendance_adjustment: Decimal = ZERO
     teaching_computed: Decimal = ZERO
@@ -277,16 +280,23 @@ def credit_breakdown(person, event):
     accredited_credits caps attendance only: it is what the event is
     accredited for as an attended activity. Minutes are summed across the
     event first, so hundredths are cut once per kind, not per session.
+    The rates come from the event's program and are returned alongside, so
+    a certificate line can snapshot what they were.
     """
     sessions, source = creditable_time(person, event)
+    program = event.program
+    attendance_rate = rate_per_hour(program, ATTENDANCE)
+    teaching_rate = rate_per_hour(program, TEACHING)
     attendance = min(
-        credits_for_minutes(sum(s.credited_minutes for s in sessions), ATTENDANCE),
+        credits_for_minutes(sum(s.credited_minutes for s in sessions), attendance_rate),
         event.accredited_credits,
     ).quantize(ZERO)
-    teaching = credits_for_minutes(sum(s.teaching_minutes for s in sessions), TEACHING)
+    teaching = credits_for_minutes(sum(s.teaching_minutes for s in sessions), teaching_rate)
     return CreditBreakdown(
         sessions=sessions,
         source=source,
+        attendance_rate_per_hour=attendance_rate,
+        teaching_rate_per_hour=teaching_rate,
         attendance_computed=attendance,
         attendance_adjustment=adjustment_credits(person, event, ATTENDANCE),
         teaching_computed=teaching,

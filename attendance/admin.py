@@ -6,7 +6,13 @@ from django.contrib import admin, messages
 from django.utils import timezone
 from django.utils.html import format_html, format_html_join
 
-from core.admin import BaseAdmin, NoDeleteMixin, SafeModelForm, admin_link
+from core.admin import (
+    BaseAdmin,
+    NoDeleteMixin,
+    ProgramScopedAdminMixin,
+    SafeModelForm,
+    admin_link,
+)
 
 from . import teams
 from .models import AttendanceRecord, AttendanceSupersession, AttendanceUpload
@@ -82,7 +88,7 @@ class UploadForm(SafeModelForm):
 
 
 @admin.register(AttendanceUpload)
-class AttendanceUploadAdmin(NoDeleteMixin, BaseAdmin):
+class AttendanceUploadAdmin(ProgramScopedAdminMixin, NoDeleteMixin, BaseAdmin):
     """Upload a Teams export. Once stored, nothing about it can be edited."""
 
     list_display = [
@@ -94,7 +100,7 @@ class AttendanceUploadAdmin(NoDeleteMixin, BaseAdmin):
         "parsed",
         "short_hash",
     ]
-    list_filter = ["event"]
+    list_filter = ["event__program", "event"]
     date_hierarchy = "uploaded_at"
     search_fields = ["original_filename", "sha256"]
     list_select_related = ["event", "uploaded_by"]
@@ -260,7 +266,7 @@ class ReplacesInline(admin.TabularInline):
 
 
 @admin.register(AttendanceRecord)
-class AttendanceRecordAdmin(NoDeleteMixin, BaseAdmin):
+class AttendanceRecordAdmin(ProgramScopedAdminMixin, NoDeleteMixin, BaseAdmin):
     """
     The attendance review screen.
 
@@ -282,7 +288,7 @@ class AttendanceRecordAdmin(NoDeleteMixin, BaseAdmin):
     ]
     list_display_links = ["who"]
     list_editable = ["person"]
-    list_filter = [MatchedFilter, ActiveFilter, "source", "match_method", "event"]
+    list_filter = ["event__program", MatchedFilter, ActiveFilter, "source", "match_method", "event"]
     date_hierarchy = "event__date"
     search_fields = [
         "raw_display_name",

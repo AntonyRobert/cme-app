@@ -125,13 +125,25 @@ def test_a_longer_talk_earns_more_teaching(person):
     assert credit_breakdown(person, event).teaching_credits == D("1.50")
 
 
-def test_rates_are_a_setting_per_kind(event, person, settings):
-    settings.CREDIT_RATES_PER_HOUR = {"attendance": "1.0", "teaching": "2.0"}
+def test_rates_are_per_program_and_per_kind(event, person):
+    event.program.teaching_rate_per_hour = D("2.00")
+    event.program.save()
     first, second, _ = talks(event)
     present(person, first)
     teams_row(event, person, 60, 120)
     evaluate(person, second)
     assert kinds(person, event) == (D("1.00"), D("2.00"), D("3.00"))
+    b = credit_breakdown(person, event)
+    assert (b.attendance_rate_per_hour, b.teaching_rate_per_hour) == (D("1.00"), D("2.00"))
+
+
+def test_another_programs_rate_does_not_apply(event, person):
+    from programs.tests.factories import make_program
+
+    other = make_program("Other", teaching_rate_per_hour=D("5.00"))
+    present(person, talks(event)[0])
+    assert credit_breakdown(person, event).teaching_credits == D("1.00")
+    assert other.teaching_rate_per_hour == D("5.00")  # exists, not used
 
 
 def test_the_accreditation_cap_applies_to_attendance_only(event, person):

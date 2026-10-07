@@ -256,7 +256,11 @@ class PersonAdmin(NoDeleteMixin, BaseAdmin):
     # --- Merging -------------------------------------------------------------
 
     def has_merge_permission(self, request):
-        return request.user.has_perm("people.merge_person")
+        from core.authz import admin_programs
+
+        return request.user.has_perm("people.merge_person") and (
+            request.user.is_superuser or admin_programs(request.user).exists()
+        )
 
     @admin.action(description="Merge two selected people…", permissions=["merge"])
     def merge_selected(self, request, queryset):

@@ -11,10 +11,12 @@ from core.admin import (
     AutoPositionFormSet,
     BaseAdmin,
     PositionedRowForm,
+    ProgramScopedAdminMixin,
     SafeModelForm,
     admin_link,
     changelist_url,
 )
+from core.authz import staff_programs, writable_programs
 
 from .coi import declare
 from .models import (
@@ -69,9 +71,10 @@ class SessionInline(admin.TabularInline):
 
 
 @admin.register(RoundsEvent)
-class RoundsEventAdmin(BaseAdmin):
+class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
     list_display = [
         "date",
+        "program",
         "title",
         "status",
         "accredited_credits",
@@ -79,13 +82,20 @@ class RoundsEventAdmin(BaseAdmin):
         "attendance_rows",
         "unmatched_rows",
     ]
-    list_filter = ["status"]
+    list_filter = ["program", "status"]
     date_hierarchy = "date"
     search_fields = ["title", "teams_meeting_title", "sessions__title"]
     inlines = [SessionInline]
     readonly_fields = ["credit_summary"]
     fieldsets = [
-        (None, {"fields": ["title", "date", "status", "accredited_credits"]}),
+        (
+            None,
+            {
+                "fields": ["program", "title", "date", "status", "accredited_credits"],
+                "description": "A blank title takes the program's series name; blank credits "
+                "take the program's default.",
+            },
+        ),
         (
             "Schedule",
             {
@@ -249,10 +259,10 @@ class MissingCOIFilter(admin.SimpleListFilter):
 
 
 @admin.register(Session)
-class SessionAdmin(BaseAdmin):
+class SessionAdmin(ProgramScopedAdminMixin, BaseAdmin):
     list_display = ["event", "position", "title", "times", "presenter_names", "submitted"]
     list_display_links = ["title"]
-    list_filter = [SubmittedFilter, MissingCOIFilter, "event__status"]
+    list_filter = ["event__program", SubmittedFilter, MissingCOIFilter, "event__status"]
     date_hierarchy = "event__date"
     search_fields = [
         "title",
@@ -335,17 +345,18 @@ class COIDeclarationForm(SafeModelForm):
         model = COIDeclaration
         fields = ["person", "declared_at", "disclosure_text_version"]
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, current_version=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.current_version = current_version or settings.COI_CURRENT_VERSION
         self.fields["disclosure_text_version"].widget = forms.Select(
             choices=[(v, v) for v in settings.COI_QUESTIONS]
         )
-        self.fields["disclosure_text_version"].initial = settings.COI_CURRENT_VERSION
+        self.fields["disclosure_text_version"].initial = self.current_version
         self.fields["disclosure_text_version"].help_text = (
-            "The questions below are the current version. Choose another only to "
+            "The questions below are your program's current version. Choose another only to "
             "transcribe a declaration made on an older form."
         )
-        for key, text in coi_questions(settings.COI_CURRENT_VERSION):
+        for key, text in coi_questions(self.current_version):
             self.fields[f"q_{key}"] = forms.BooleanField(required=False, label=text)
             self.fields[f"q_{key}_details"] = forms.CharField(
                 required=False,
@@ -355,7 +366,7 @@ class COIDeclarationForm(SafeModelForm):
             )
 
     def answers(self):
-        version = self.cleaned_data.get("disclosure_text_version") or settings.COI_CURRENT_VERSION
+        version = self.cleaned_data.get("disclosure_text_version") or self.current_version
         return {
             key: (
                 bool(self.cleaned_data.get(f"q_{key}")),
@@ -366,12 +377,12 @@ class COIDeclarationForm(SafeModelForm):
 
     def clean(self):
         cleaned = super().clean()
-        version = cleaned.get("disclosure_text_version") or settings.COI_CURRENT_VERSION
-        if version != settings.COI_CURRENT_VERSION:
+        version = cleaned.get("disclosure_text_version") or self.current_version
+        if version != self.current_version:
             self.add_error(
                 "disclosure_text_version",
-                "Only the current questionnaire can be entered here. Older declarations "
-                "are read-only.",
+                "Only your program's current questionnaire can be entered here. Older "
+                "declarations are read-only.",
             )
             return cleaned
         for key, text in coi_questions(version):
@@ -397,9 +408,26 @@ class COIDeclarationAdmin(AppendOnlyAdmin):
     autocomplete_fields = ["person"]
     readonly_fields = ["answers", "valid_to"]
 
+    def current_version_for(self, request):
+        """The questionnaire version of the staff member's programs (the first, if several)."""
+        versions = list(
+            writable_programs(request.user)
+            .order_by("name")
+            .values_list("coi_question_version", flat=True)
+            .distinct()
+        )
+        return versions[0] if versions else settings.COI_CURRENT_VERSION
+
     def get_form(self, request, obj=None, **kwargs):
         if obj is None:
-            kwargs["form"] = COIDeclarationForm
+            version = self.current_version_for(request)
+
+            class BoundForm(COIDeclarationForm):
+                def __init__(self, *args, **inner):
+                    inner.setdefault("current_version", version)
+                    super().__init__(*args, **inner)
+
+            kwargs["form"] = BoundForm
             # The question fields are added by the form itself; only the
             # model's own fields go through the form factory.
             kwargs["fields"] = ["person", "declared_at", "disclosure_text_version"]
@@ -412,7 +440,7 @@ class COIDeclarationAdmin(AppendOnlyAdmin):
                 ("Answers, in the wording of that version", {"fields": ["answers"]}),
             ]
         question_fields = []
-        for key, _ in coi_questions(settings.COI_CURRENT_VERSION):
+        for key, _ in coi_questions(self.current_version_for(request)):
             question_fields.append((f"q_{key}", f"q_{key}_details"))
         return [
             (None, {"fields": ["person", "declared_at", "disclosure_text_version"]}),

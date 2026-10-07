@@ -8,8 +8,10 @@ from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
 
+from core.authz import ProgramScopedQuerySet
 from core.constraints import is_quarter_multiple, validate_quarter_multiple
 from core.models import AppendOnlyMixin, ImmutableRowError, UUIDModel
+from programs.models import Program
 from people.identity import identity_ids
 from people.models import Person
 from people.ownership import PersonOwnedQuerySet
@@ -25,6 +27,7 @@ DEFAULT_EVENT_LENGTH = datetime.timedelta(hours=3)
 
 
 def default_event_title():
+    """Kept for migration 0001; events now take their title from the program."""
     return settings.SERIES_NAME
 
 
@@ -56,6 +59,10 @@ def end_of_academic_year(today=None):
     return datetime.date(year, 6, 30)
 
 
+class RoundsEventQuerySet(ProgramScopedQuerySet):
+    program_lookup = "program"
+
+
 class RoundsEvent(UUIDModel):
     """One fortnightly rounds: a block of sessions people attend as a whole."""
 
@@ -65,8 +72,17 @@ class RoundsEvent(UUIDModel):
         HELD = "held", "Held"
         CLOSED = "closed", "Closed"
 
+    program = models.ForeignKey(
+        Program,
+        on_delete=models.PROTECT,
+        related_name="events",
+        help_text="Decides the credit rates, the series name and whose certificate this "
+        "ends up on.",
+    )
     title = models.CharField(
-        max_length=200, default=default_event_title, help_text="Prints on certificate lines."
+        max_length=200,
+        blank=True,
+        help_text="Blank means the program's series name. Prints on certificate lines.",
     )
     date = models.DateField(blank=True, help_text="Blank means the day it starts.")
     start_at = models.DateTimeField(help_text="Every session must fall between these two.")
@@ -82,9 +98,13 @@ class RoundsEvent(UUIDModel):
     accredited_credits = models.DecimalField(
         max_digits=5,
         decimal_places=2,
+        blank=True,
         validators=[MinValueValidator(Decimal("0")), validate_quarter_multiple],
-        help_text="Credits available for the whole event, in steps of 0.25.",
+        help_text="The accreditor-set ceiling on attendance credit for this event, in steps "
+        "of 0.25. Blank means the program's default.",
     )
+
+    objects = RoundsEventQuerySet.as_manager()
 
     class Meta:
         ordering = ["-date"]
@@ -119,6 +139,11 @@ class RoundsEvent(UUIDModel):
                 self.end_at = self.start_at + DEFAULT_EVENT_LENGTH
             if self.date is None:
                 self.date = timezone.localdate(self.start_at)
+        if self.program_id:
+            if not self.title:
+                self.title = self.program.series_name
+            if self.accredited_credits is None:
+                self.accredited_credits = self.program.default_accredited_credits
 
     def clean(self):
         super().clean()
@@ -276,6 +301,10 @@ class COIResponse(AppendOnlyMixin, UUIDModel):
                 )
 
 
+class SessionQuerySet(ProgramScopedQuerySet):
+    program_lookup = "event__program"
+
+
 class Session(UUIDModel):
     """
     One lecture inside an event. The evaluation form targets a session, and
@@ -303,6 +332,8 @@ class Session(UUIDModel):
     submitted_at = models.DateTimeField(
         null=True, blank=True, help_text="Blank means the presenters haven't filled it in yet."
     )
+
+    objects = SessionQuerySet.as_manager()
 
     class Meta:
         ordering = ["event", "start_at", "position"]
