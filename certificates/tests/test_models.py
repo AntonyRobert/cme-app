@@ -56,26 +56,20 @@ def line(certificate, event=None, **extra):
     "lines, expected",
     [
         ([], "0.00"),
-        (["0.98"], "1.00"),
-        (["0.98", "0.98", "0.98"], "3.00"),  # 2.94
-        (["0.33"], "0.00"),
-        (["0.50"], "1.00"),  # halves go up
-        (["1.49"], "1.00"),
-        (["1.50"], "2.00"),
-        (["2.49", "0.02"], "3.00"),  # rounded once, on the sum, not per line
-        (["12.63"], "13.00"),
-        (["12.40"], "12.00"),
+        (["0.98"], "0.98"),
+        (["0.98", "0.98", "0.98"], "2.94"),
+        (["0.33"], "0.33"),
+        (["2.40"], "2.40"),  # 2.40 earned prints 2.40, not 2
+        (["2.49", "0.02"], "2.51"),
+        (["12.63"], "12.63"),
     ],
 )
-def test_certificate_total_rounds_the_years_sum_to_the_nearest_whole_credit(lines, expected):
+def test_certificate_total_is_the_exact_sum_of_the_lines(lines, expected):
+    """No rounding at issue: the total always equals the sum of the lines."""
     result = certificate_total([Decimal(value) for value in lines])
     assert result == Decimal(expected)
+    assert result == sum((Decimal(v) for v in lines), Decimal("0"))
     assert result.as_tuple().exponent == -2
-
-
-def test_certificate_total_is_rounded_on_the_sum_not_line_by_line():
-    lines = [Decimal("0.40")] * 5  # 2.00 in total; each line alone would round to 0
-    assert certificate_total(lines) == Decimal("2.00")
 
 
 def test_verification_codes_use_the_unambiguous_alphabet():

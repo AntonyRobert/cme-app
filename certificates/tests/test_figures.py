@@ -1,4 +1,4 @@
-"""What a certificate prints: attendance and teaching apart, each rounded on its own."""
+"""What a certificate prints: attendance and teaching apart, exact, never rounded."""
 import datetime
 from decimal import Decimal
 
@@ -44,9 +44,10 @@ def test_a_presenter_who_also_attends_gets_both_kinds_on_separate_lines():
     assert first.presented_session_titles == [a2.title]
     assert (first.attended_minutes, first.teaching_minutes) == (120, 60)
     assert (second.attendance_credits, second.teaching_credits) == (D("0.98"), D("0.00"))
-    # The year: attendance 2.98 rounds to 3, teaching 1 stays 1.
-    assert (figures.attendance_credits, figures.teaching_credits) == (D("3.00"), D("1.00"))
-    assert figures.total_credits == D("4.00")
+    # The year: attendance 2.00 + 0.98 exactly, teaching 1.00.
+    assert (figures.attendance_credits, figures.teaching_credits) == (D("2.98"), D("1.00"))
+    assert figures.total_credits == D("3.98")
+    assert figures.attendance_credits == sum(line.attendance_credits for line in figures.lines)
 
 
 def test_a_line_has_no_single_blended_credit_figure():
@@ -64,11 +65,10 @@ def line(attendance, teaching):
     )
 
 
-def test_each_kind_is_rounded_on_its_own_and_the_total_is_their_sum():
+def test_each_kind_is_the_exact_sum_and_the_total_is_their_sum():
     figures = CertificateFigures(lines=[line("1.30", "0.50"), line("1.30", "0.00")])
-    # Blended, 3.10 would round to 3. Kept apart: attendance 2.60 -> 3, teaching 0.50 -> 1.
-    assert (figures.attendance_credits, figures.teaching_credits) == (D("3.00"), D("1.00"))
-    assert figures.total_credits == D("4.00")
+    assert (figures.attendance_credits, figures.teaching_credits) == (D("2.60"), D("0.50"))
+    assert figures.total_credits == D("3.10")
 
 
 def test_events_with_no_credit_of_either_kind_are_left_off():

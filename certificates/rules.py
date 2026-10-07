@@ -1,6 +1,6 @@
 """Certificate rules that might change. One function each."""
 import secrets
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 
 from people.models import Person
 
@@ -23,16 +23,13 @@ def generate_verification_code():
 
 def certificate_total(line_credits):
     """
-    The credit total printed on a certificate: the year's exact credits
-    added up and rounded to the nearest whole credit, halves up.
-
-    This is the only place credit is ever rounded. The lines keep their
-    exact figures, so they will not always add up to the printed total.
+    The credit total printed on a certificate: the exact sum of its lines,
+    to two decimals. No rounding at issue, anywhere: credit is hours
+    attended, so the certificate says the hours, and a total that equals
+    the sum of the lines is what an accreditor checks first.
     """
     exact = sum((Decimal(value) for value in line_credits), Decimal("0"))
-    return max(exact, Decimal("0")).quantize(Decimal("1"), rounding=ROUND_HALF_UP).quantize(
-        Decimal("0.00")
-    )
+    return max(exact, Decimal("0")).quantize(Decimal("0.00"))
 
 
 def certificate_type_for(person):

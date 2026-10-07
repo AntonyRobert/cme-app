@@ -4,7 +4,8 @@ What a year-end certificate would print, computed but not issued.
 Issuing (the PDF, saving the snapshot, the verification page) is not
 built yet. This is the calculation it will snapshot, kept separate so it
 can be checked now: one line per event with attendance and teaching kept
-apart, and a total per kind. Never one blended figure.
+apart, and an exact total per kind. Never one blended figure, never
+rounded.
 """
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -39,17 +40,17 @@ class CertificateFigures:
 
     @property
     def attendance_credits(self):
-        """The year's attendance credit, rounded on its own to a whole credit."""
+        """The year's attendance credit: the exact sum of the lines."""
         return certificate_total(line.attendance_credits for line in self.lines)
 
     @property
     def teaching_credits(self):
-        """The year's teaching credit, rounded on its own to a whole credit."""
+        """The year's teaching credit: the exact sum of the lines."""
         return certificate_total(line.teaching_credits for line in self.lines)
 
     @property
     def total_credits(self):
-        """The sum of the two rounded kinds, so the printed figures always add up."""
+        """The sum of the two kinds. All three printed figures add up exactly."""
         return self.attendance_credits + self.teaching_credits
 
 
