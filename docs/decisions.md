@@ -329,6 +329,24 @@ which would require McGill IT admin consent.
 Draft and published are separate fields on anything an agent might one day write. That
 split is the entire retrofit. No provider abstraction, no job queue, no scaffolding.
 
+**Evaluation forms are versioned templates; a submission answers one version.**
+`EvaluationForm` belongs to a program and has draft/active/retired status; its questions
+live on `EvaluationFormVersion` rows that lock at the first submission, so a reworded
+question is a new version and October's answers keep October's wording (the
+`COIDeclaration.disclosure_text_version` principle). `question_key` is stable across
+versions for year-over-year comparison. `is_complete` is a cache recomputed from the
+responses: every required question of the submission's version, expanded for the
+session, has an answer; optional questions count neither way. Resolution is session,
+then event, then program default, active forms only. `per_objective` is a question kind
+rather than a special case outside the template system.
+
+**The seeded "Standard CME evaluation" is provisional, pending McGill CPD.**
+Accrediting bodies specify what a CME evaluation must ask. Until CPD confirms the
+wording, every program's default is: objectives met (one Likert per objective,
+required), relevance to practice (Likert, required), free of commercial bias (yes/no,
+required), bias detail, practice change and comments (free text, optional). Changing
+it later is a new version of the form, not an edit of what was answered.
+
 ## Open
 
 **Retention period.**

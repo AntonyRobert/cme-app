@@ -90,6 +90,19 @@ listed). Nothing pushed.
   look": signed off, then rows arrived after the last sign-off or a proposal moved.
   (3) The room page stamps the server time and warns in red past five seconds of drift;
   the token window is unchanged.
+- **Evaluation form templates** (your last message). `EvaluationForm` / `EvaluationFormVersion` /
+  `EvaluationQuestion` in `credits`, with the service in `credits/evaluation_forms.py`:
+  resolution (session, event, program; active forms only, skips reported), per-objective
+  expansion, completeness, new version, duplicate, the standard form. `EvaluationSubmission`
+  now records `form_version` (required; existing rows were pointed at the standard form's
+  v1 by the migration) and `is_complete` is a cache recomputed from the responses on every
+  save; the factory's `evaluate(complete=True)` answers the required questions instead of
+  setting a flag. Admin: form page with versions and submission counts, "New version",
+  "Duplicate", "Preview" against a chosen session; version page editable until locked;
+  the session page shows the resolved form and its level; program default on the program
+  page; the event and session forms have the FK. Attendee form at `/evaluate/<session>/`
+  (stable, for the step-5 email), linked from `/me/`. Eighteen tests in
+  `credits/tests/test_evaluation_forms.py`, including the four you listed.
 - **"Import paper sign-in sheet"** on the event page. Lists the program's known people
   (anyone who attended, evaluated or presented at one of its events) with a checkbox per
   session, five blank lines for names not on the list, and a Record button. A tick is a
@@ -125,6 +138,24 @@ listed). Nothing pushed.
   event being edited, falling back to the first program the staff member has a role in.
 - **`Program.retention_years`** is stored and editable, default 7. No deletion or
   anonymization logic, per your note; still open in decisions.md.
+- **A version with no submissions is edited in place; it locks at the first.** Your
+  brief says editing an active form creates a new version. I read the invariant as "never
+  mutate a version that has submissions", and did not make every typo fix on a fresh form
+  a new version: the version page says it is unlocked and will lock, and once locked it
+  is read-only with a link to "New version". `new_version` copies the current questions.
+- **`per_objective` always expands to Likert 1 to 5.** The brief's standard form says
+  "per_objective, likert 5"; a per-objective yes/no would need a sub-kind, which nothing
+  asks for yet.
+- **Choice answers go in a new `EvaluationResponse.selected` JSON list**, rather than
+  overloading `free_text` or `rating`. Small schema addition; documented.
+- **The attendee form is built, not just its URL.** A stable URL that does nothing seemed
+  worse than one that works: the view checks the window, validates required questions,
+  writes the submission against the resolved version, and shows a complete one read-only
+  with its own wording. The email that links to it is still step 5.
+- **A migration points existing submissions at the standard form's v1.** Their responses
+  predate templates (keys `objective_met`, `overall`), so they read as incomplete under v1
+  until re-answered. In the dev database that is seed data only; a real deployment has no
+  submissions yet.
 - **A late evaluation does not by itself reopen a signed-off event.** Your February
   scenario: `confirm_event` decides every person-session that has attendance rows,
   evaluated or not, so January's decision already covers February's evaluation and the
@@ -191,6 +222,13 @@ listed). Nothing pushed.
 - The room page now warns about its own clock; the phones' clocks do not matter (the
   phone only follows a URL). The warning is a few lines of inline script on a staff
   page, the first JavaScript in the project; it degrades to nothing without it.
+- Staff-entered evaluations in the admin need the responses typed into the inline for
+  the submission to count as complete, since the flag is computed. That is more work than
+  ticking a box, and correct; a staff shortcut ("mark complete without answers") would
+  be a lie in the data.
+- `is_complete` is recomputed by re-rendering the version against the session on every
+  response save. Cheap per submission; a bulk re-import of responses would want a single
+  recompute at the end.
 - The sign-off column runs `review()` per event on the changelist, and the filter runs
   it for every event in the list before filtering. Fine at a fortnightly series (a few
   dozen events a year); it would want caching before a program with hundreds.

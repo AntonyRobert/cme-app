@@ -82,6 +82,7 @@ are data, and so the public directory (`decisions.md`) has something to push.
 | accreditation_year_end_month, accreditation_year_end_day | smallint | Was the `ACCREDITATION_YEAR_END` setting |
 | coi_question_version | text | Which `COI_QUESTIONS` version new declarations use. Was `COI_CURRENT_VERSION` |
 | retention_years | smallint | How long records are kept after the accreditation year. Policy still open; the field is where the answer goes |
+| default_evaluation_form | FK EvaluationForm, nullable | The form a session uses unless its event or the session says otherwise. Most programs set it once |
 | is_active | bool | A retired program keeps its history and takes no new events |
 
 Everything that used to be a per-deployment setting and differs between programs lives
@@ -266,6 +267,7 @@ flyer renders an event, the evaluation form targets a session.
 | teams_meeting_title | text | The meeting title exactly as Teams shows it. An export is matched to an event on this plus the date; exports carry no meeting ID |
 | status | enum | draft, published, held, closed |
 | accredited_credits | decimal | The accreditor-set ceiling on attendance credit for the event. Pre-filled from the program's default. Must be a multiple of 0.25: it is a ceiling someone approved, not a computed figure |
+| evaluation_form | FK EvaluationForm, nullable | This event's sessions use it. Blank means the program's default |
 
 Everything that will one day be pushed to the public directory (`decisions.md`) is
 already on this table and its sessions: title, date, times, objectives, presenter names
@@ -289,6 +291,7 @@ a talk runs over, change that session's `end_at` once and everyone's credit foll
 | position | smallint | 1, 2, 3. Order on the flyer |
 | title | text | |
 | start_at, end_at | timestamptz | Entered by the presenter. A blank start follows the previous session (or the event's start); a blank end is an hour later |
+| evaluation_form | FK EvaluationForm, nullable | This talk uses it. Blank means the event's, then the program's |
 | draft_blurb, published_blurb | text | The draft/published split |
 | submitted_at | timestamptz, nullable | Null means the presenters haven't filled it yet |
 
@@ -327,8 +330,8 @@ interest is per person, so a co-presenter would have broken a single FK on `Sess
 | position | smallint | |
 | text | text | |
 
-A separate table rather than two columns on `Session`. The evaluation form generates one
-question per objective from these rows.
+A separate table rather than two columns on `Session`. A `per_objective` question on the
+evaluation form expands into one question per row at render time.
 
 ### COIDeclaration
 
@@ -768,7 +771,8 @@ Credit needs two things: the person was there, and they completed the evaluation
 | submitted_at | timestamptz | |
 | self_reported_session_minutes | smallint | How long they say they attended this lecture |
 | attestation | bool | They confirm the minutes are accurate. Required |
-| is_complete | bool | All required objective questions answered |
+| form_version | FK EvaluationFormVersion | The questions as worded when this was answered. Never re-pointed |
+| is_complete | bool, cache | Every required question of `form_version`, expanded for the session, has an answer. Recomputed from the responses on every save of the submission or a response; not editable |
 
 Unique on `(person, session)`. A submission is accepted only while a window is open for
 that person and session (below). Saving a complete submission closes any reopened window.
@@ -811,9 +815,77 @@ a "request another week" action, or the reason neither is available.
 | question_key | text | Stable key so years are comparable |
 | rating | smallint, nullable | Likert |
 | free_text | text, nullable | |
+| selected | jsonb, nullable | The option(s) chosen, for choice questions |
 
-Keep `question_key` stable and the year-end report compares like with like even after a
-question is reworded.
+One row per rendered question that was answered; an optional question left blank has no
+row. Keep `question_key` stable and the year-end report compares like with like even
+after a question is reworded.
+
+### Evaluation form templates
+
+A form is a named, reusable template that belongs to a program. Its questions live on
+**immutable versions**: a version locks the moment one submission answers it, and from
+then on any edit goes to a new version, so an evaluation submitted in October renders,
+prints and reports with October's wording after the form is edited in March. Same
+principle as `COIDeclaration.disclosure_text_version`.
+
+**EvaluationForm**
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| id | UUID pk | |
+| program | FK Program | Unique with `name` |
+| name | text | |
+| status | enum | draft, active, retired. Only an active form resolves |
+| created_at, created_by | timestamptz, FK User nullable | |
+
+**EvaluationFormVersion**
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| id | UUID pk | |
+| form | FK EvaluationForm | Unique with `number` |
+| number | smallint | 1, 2, 3 ... The form's current version is the highest |
+| note | text | What changed, and why |
+| created_at, created_by | timestamptz, FK User nullable | |
+
+Locked (no question added, changed or deleted; refused at the model) once it has a
+submission. A version with no submissions is edited in place: nothing answered it yet.
+
+**EvaluationQuestion**
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| id | UUID pk | |
+| version | FK EvaluationFormVersion | Unique with `question_key` and with `position` |
+| question_key | slug | Stable across versions and years |
+| position | smallint | Blank takes the next number |
+| prompt, help_text | text | |
+| kind | enum | likert_5, yes_no, single_choice, multi_choice, free_text, per_objective |
+| required | bool | |
+| choices | jsonb | The options, for the two choice kinds |
+
+`per_objective` expands at render time into one Likert question per `LearningObjective`
+of the session, `{objective}` in the prompt replaced by the objective's text; the
+responses carry the objective FK. A session with no objectives asks none.
+
+**Resolution**, most specific wins: `Session.evaluation_form`, then
+`RoundsEvent.evaluation_form`, then `Program.default_evaluation_form`, resolving to the
+form's current version when a submission starts. A form that is not active is skipped
+and the skip is reported, so a retired form pinned on an old session does not silently
+swallow the program default. The session admin page shows the resolved form and the
+level it came from (`credits/evaluation_forms.py: resolve_form`).
+
+**Admin.** Program admins create and edit forms in their own program; coordinators view.
+A form page lists its versions with submission counts; "New version" copies the current
+questions into the next number; "Duplicate" copies them into a new draft form; "Preview"
+renders the form as an attendee sees it against a chosen session. The attendee's form
+lives at `/evaluate/<session id>/`, stable per session, which is what the reminder
+email will link to.
+
+The provisional **"Standard CME evaluation"** is seeded as every program's default
+(migration `credits.0006`, and for new programs by `create_standard_form`): see
+decisions.md, pending McGill CPD.
 
 ### Credit, computed
 
