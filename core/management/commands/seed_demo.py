@@ -102,6 +102,7 @@ class Command(BaseCommand):
             status=status,
             accredited_credits=Decimal("3.00"),
             teams_join_url="https://teams.example/l/meetup-join/demo",
+            teams_meeting_title="Health Informatics Rounds",
         )
 
     def session(self, event, position, title, presenters, objectives, ran_over_minutes=0):

@@ -30,6 +30,8 @@ class Certificate(FrozenFieldsMixin, UUIDModel):
         "certificate_type",
         "period_start",
         "period_end",
+        "attendance_credits",
+        "teaching_credits",
         "total_credits",
         "recipient_name",
         "recipient_credential",
@@ -48,6 +50,14 @@ class Certificate(FrozenFieldsMixin, UUIDModel):
     certificate_type = models.CharField(max_length=20, choices=Type.choices)
     period_start = models.DateField()
     period_end = models.DateField()
+    # Each kind is rounded on its own; the total is their sum. Never a single
+    # blended figure: it could not be split again later.
+    attendance_credits = models.DecimalField(
+        max_digits=6, decimal_places=2, validators=[MinValueValidator(0)]
+    )
+    teaching_credits = models.DecimalField(
+        max_digits=6, decimal_places=2, validators=[MinValueValidator(0)]
+    )
     total_credits = models.DecimalField(
         max_digits=6, decimal_places=2, validators=[MinValueValidator(0)]
     )
@@ -95,6 +105,10 @@ class Certificate(FrozenFieldsMixin, UUIDModel):
                 condition=Q(total_credits__gte=0), name="certificate_total_not_negative"
             ),
             models.CheckConstraint(
+                condition=Q(total_credits=F("attendance_credits") + F("teaching_credits")),
+                name="certificate_total_is_sum_of_kinds",
+            ),
+            models.CheckConstraint(
                 condition=Q(revoked_at__isnull=True, revoked_reason="")
                 | (Q(revoked_at__isnull=False) & ~Q(revoked_reason="")),
                 name="certificate_revocation_has_reason",
@@ -133,12 +147,19 @@ class CertificateLine(AppendOnlyMixin, UUIDModel):
     event = models.ForeignKey(RoundsEvent, on_delete=models.PROTECT, related_name="+")
     event_title = models.CharField(max_length=200)
     event_date = models.DateField()
+    # Attendance: the sessions attended, not presented.
     session_titles = models.JSONField(default=list, help_text="Print-only snapshot.")
     attended_minutes = models.PositiveIntegerField()
     minutes_source = models.CharField(max_length=20, choices=MinutesSource.choices)
-    computed_credits = models.DecimalField(max_digits=5, decimal_places=2)
-    adjustment_credits = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-    credits = models.DecimalField(max_digits=5, decimal_places=2)
+    attendance_computed = models.DecimalField(max_digits=5, decimal_places=2)
+    attendance_adjustment = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    attendance_credits = models.DecimalField(max_digits=5, decimal_places=2)
+    # Teaching: the sessions presented.
+    presented_session_titles = models.JSONField(default=list, help_text="Print-only snapshot.")
+    teaching_minutes = models.PositiveIntegerField(default=0)
+    teaching_computed = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    teaching_adjustment = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    teaching_credits = models.DecimalField(max_digits=5, decimal_places=2, default=0)
 
     objects = CertificateLineQuerySet.as_manager()
 
@@ -149,9 +170,13 @@ class CertificateLine(AppendOnlyMixin, UUIDModel):
                 fields=["certificate", "event"], name="certificateline_one_per_event"
             ),
             models.CheckConstraint(
-                condition=Q(credits__gte=0), name="certificateline_credits_not_negative"
+                condition=Q(attendance_credits__gte=0, teaching_credits__gte=0),
+                name="certificateline_credits_not_negative",
             ),
         ]
 
     def __str__(self):
-        return f"{self.event_date} {self.event_title}: {self.credits}"
+        return (
+            f"{self.event_date} {self.event_title}: {self.attendance_credits} attendance, "
+            f"{self.teaching_credits} teaching"
+        )

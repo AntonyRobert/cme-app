@@ -158,12 +158,17 @@ def window_state(person, session, at=None):
 def sessions_needing_evaluation(person, event, at=None):
     """
     [(session, state)] for the sessions this person attended but has not
-    completely evaluated. What the credits page lists.
+    completely evaluated. What the credits page lists. A session they
+    presented is never on it: presenters don't evaluate their own talk.
     """
     from attendance.aggregation import sessions_attended
 
+    from .rules import presented_session_ids
+
+    presented = presented_session_ids(person, event)
     return [
         (session, state)
         for session in sessions_attended(person, event)
-        if (state := window_state(person, session, at)) != STATE_EVALUATED
+        if session.pk not in presented
+        and (state := window_state(person, session, at)) != STATE_EVALUATED
     ]

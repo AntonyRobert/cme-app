@@ -213,31 +213,44 @@ class PersonAdmin(NoDeleteMixin, BaseAdmin):
         rows = person_standing(obj)
         if not rows:
             return "No attendance or evaluations yet."
+        def gap(r):
+            parts = []
+            if r.uncertified_attendance:
+                parts.append(f"{r.uncertified_attendance:+} attendance")
+            if r.uncertified_teaching:
+                parts.append(f"{r.uncertified_teaching:+} teaching")
+            return (", ".join(parts) + " not yet certified") if parts else ""
+
         body = format_html_join(
             "",
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>"
+            "<td>{}</td><td>{}</td></tr>",
             (
                 (
                     admin_link(r.event),
                     f"{len(r.breakdown.sessions_attended)}/{len(r.breakdown.sessions)}",
+                    len(r.breakdown.sessions_presented),
                     f"{len(r.breakdown.sessions_evaluated)}/{len(r.breakdown.sessions)}",
-                    r.earned_credits,
-                    r.certified_credits,
-                    "" if r.difference == 0 else f"{r.difference:+} not yet certified",
+                    r.earned_attendance,
+                    r.certified_attendance,
+                    r.earned_teaching,
+                    r.certified_teaching,
+                    gap(r),
                 )
                 for r in rows
             ),
         )
-        total_earned = sum(r.earned_credits for r in rows)
-        total_certified = sum(r.certified_credits for r in rows)
         return format_html(
-            "<table><thead><tr><th>Event</th><th>Sessions attended</th><th>Evaluated</th>"
-            "<th>Earned</th><th>Certified</th><th></th></tr></thead><tbody>{}</tbody>"
-            "<tfoot><tr><th>Total</th><td></td><td></td><th>{}</th><th>{}</th><td></td></tr>"
-            "</tfoot></table>",
+            "<table><thead><tr><th>Event</th><th>Attended</th><th>Presented</th>"
+            "<th>Evaluated</th><th>Attendance earned</th><th>Attendance certified</th>"
+            "<th>Teaching earned</th><th>Teaching certified</th><th></th></tr></thead>"
+            "<tbody>{}</tbody><tfoot><tr><th>Total</th><td></td><td></td><td></td>"
+            "<th>{}</th><th>{}</th><th>{}</th><th>{}</th><td></td></tr></tfoot></table>",
             body,
-            total_earned,
-            total_certified,
+            sum(r.earned_attendance for r in rows),
+            sum(r.certified_attendance for r in rows),
+            sum(r.earned_teaching for r in rows),
+            sum(r.certified_teaching for r in rows),
         )
 
     # --- Merging -------------------------------------------------------------

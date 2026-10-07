@@ -42,7 +42,7 @@ def who(family, **extra):
 def summary(family, event):
     """(minutes per session, source, credited minutes, credits, needs review)"""
     b = credit_breakdown(who(family), event)
-    return [s.minutes for s in b.sessions], b.source, b.credited_minutes, b.credits, b.needs_review
+    return [s.minutes for s in b.sessions], b.source, b.credited_minutes, b.attendance_credits, b.needs_review
 
 
 def test_seed_creates_what_the_admin_needs(seeded):
@@ -98,7 +98,8 @@ def test_first_event_credit(seeded, family, expected):
         ("Gagnon", ([60, 60, 65], MinutesSource.TEAMS, 65, D("1.08"), False)),
         ("Nguyen", ([60, 60, 50], MinutesSource.TEAMS, 60, D("1.00"), False)),
         # Teams for 20 minutes, then an hours-only row for the same session
-        ("Okafor", ([60, 0, 0], MinutesSource.MIXED, 60, D("1.00"), False)),
+        # he presented talk 1, so his time there is teaching, not attendance
+        ("Okafor", ([60, 0, 0], MinutesSource.MIXED, 0, D("0.00"), False)),
         # recorded 30, claims 60
         ("Lavoie", ([30, 0, 0], MinutesSource.TEAMS, 30, D("0.50"), True)),
     ],
@@ -121,13 +122,13 @@ def test_a_merge_brings_minutes_and_evaluation_together(seeded):
     main, duplicate = Person.objects.filter(family_name="Tremblay").order_by("created_at")
     before = credit_breakdown(main, second)
     assert (before.source, before.needs_review) == (MinutesSource.SELF_REPORTED, True)
-    assert credit_breakdown(duplicate, second).credits == D("0.00")
+    assert credit_breakdown(duplicate, second).attendance_credits == D("0.00")
 
     merge_people(main, duplicate, user=make_staff())
 
     after = credit_breakdown(main, second)
     assert ([s.minutes for s in after.sessions], after.source) == ([60, 60, 65], MinutesSource.TEAMS)
-    assert (after.credits, after.needs_review) == (D("1.00"), False)
+    assert (after.attendance_credits, after.needs_review) == (D("1.00"), False)
 
 
 def test_matching_one_unmatched_rejoin_row_clears_all_three(seeded):
@@ -140,3 +141,20 @@ def test_matching_one_unmatched_rejoin_row_clears_all_three(seeded):
     assert result.email_added == "lea.bouchard@hospital.example"
     b = credit_breakdown(bouchard, second)
     assert [s.minutes for s in b.sessions] == [60, 54, 64]  # gaps between rejoins excluded
+
+
+@pytest.mark.parametrize(
+    "family, event_index, presented, teaching",
+    [
+        ("Gagnon", 0, [1], D("1.00")),
+        ("Sharma", 0, [2], D("1.00")),
+        ("Côté", 0, [3], D("1.00")),
+        ("Okafor", 1, [1], D("1.00")),
+        ("Gagnon", 1, [2], D("1.00")),  # co-presenter of talk 2
+        ("Haddad", 1, [3], D("1.08")),  # talk 3 ran to 65 minutes
+    ],
+)
+def test_presenters_earn_teaching_credit(seeded, family, event_index, presented, teaching):
+    b = credit_breakdown(who(family), seeded[event_index])
+    assert [s.position for s in b.sessions_presented] == presented
+    assert b.teaching_credits == teaching

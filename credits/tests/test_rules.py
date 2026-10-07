@@ -51,7 +51,7 @@ def sessions(event):
 def standing(person, event):
     """(credited minutes, computed credits, credits) in one tuple."""
     b = credit_breakdown(person, event)
-    return b.credited_minutes, b.computed_credits, b.credits
+    return b.credited_minutes, b.attendance_computed, b.attendance_credits
 
 
 # --- Credit is hours attended ------------------------------------------------
@@ -158,7 +158,7 @@ def test_evaluating_one_session_does_not_claim_credit_for_three(event, person):
     b = credit_breakdown(person, event)
     assert b.minutes == 180  # all attended
     assert [s.credited_minutes for s in b.sessions] == [60, 0, 0]
-    assert (b.computed_credits, b.credits) == (D("1.00"), D("1.00"))
+    assert (b.attendance_computed, b.attendance_credits) == (D("1.00"), D("1.00"))
 
 
 def test_credit_grows_as_each_session_is_evaluated(event, person):
@@ -177,10 +177,10 @@ def test_credit_appears_after_a_late_evaluation(event, person):
     """Credit is a moving target: nothing about attendance changes, only the gate."""
     teams_row(event, person, 0, 60)
     before = credit_breakdown(person, event)
-    assert (before.minutes, before.credits) == (60, D("0.00"))
+    assert (before.minutes, before.attendance_credits) == (60, D("0.00"))
     evaluate(person, sessions(event)[0], submitted_at=event.end_at.replace(year=2030))
     after = credit_breakdown(person, event)
-    assert (after.minutes, after.credits) == (60, D("1.00"))
+    assert (after.minutes, after.attendance_credits) == (60, D("1.00"))
 
 
 def test_no_credit_for_an_evaluated_session_that_was_not_attended(event, person):
@@ -265,7 +265,7 @@ def test_credit_is_always_a_decimal_with_two_places(person):
     evaluate(person, sessions(event)[0])
     adjust(person, event, "0.25")
     b = credit_breakdown(person, event)
-    for value in (b.computed_credits, b.adjustment_credits, b.credits):
+    for value in (b.attendance_computed, b.attendance_adjustment, b.attendance_credits):
         assert isinstance(value, Decimal)
         assert value.as_tuple().exponent == -2
 
@@ -321,7 +321,7 @@ def test_recorded_minutes_win_over_the_self_report(event, person):
     b = credit_breakdown(person, event)
     first = b.sessions[0]
     assert (first.minutes, first.source, first.self_reported_minutes) == (30, MinutesSource.TEAMS, 60)
-    assert b.credits == D("0.50")
+    assert b.attendance_credits == D("0.50")
 
 
 def test_self_report_is_the_fallback_when_there_is_no_attendance_row(event, person):
@@ -331,7 +331,7 @@ def test_self_report_is_the_fallback_when_there_is_no_attendance_row(event, pers
     assert b.source == MinutesSource.SELF_REPORTED
     assert [s.minutes for s in b.sessions] == [60, 60, 60]
     assert b.review_reasons == (REVIEW_SELF_REPORTED_ONLY,)
-    assert b.credits == D("3.00")
+    assert b.attendance_credits == D("3.00")
 
 
 def test_self_report_cannot_exceed_the_session(event, person):
@@ -343,7 +343,7 @@ def test_self_report_only_covers_the_sessions_they_evaluated(event, person):
     evaluate(person, sessions(event)[1], minutes=60)
     b = credit_breakdown(person, event)
     assert [s.minutes for s in b.sessions] == [0, 60, 0]
-    assert b.credits == D("1.00")
+    assert b.attendance_credits == D("1.00")
 
 
 def test_recorded_zero_is_not_replaced_by_the_self_report(event, person):
@@ -352,7 +352,7 @@ def test_recorded_zero_is_not_replaced_by_the_self_report(event, person):
     b = credit_breakdown(person, event)
     assert (b.sessions[0].minutes, b.source) == (0, MinutesSource.TEAMS)
     assert b.review_reasons == (REVIEW_CLAIMS_MORE,)
-    assert b.credits == D("0.00")
+    assert b.attendance_credits == D("0.00")
 
 
 @pytest.mark.parametrize(
@@ -381,7 +381,7 @@ def test_rows_adding_up_to_more_than_a_session_are_flagged(event, person):
     b = credit_breakdown(person, event)
     assert b.sessions[0].minutes == 60
     assert b.review_reasons == (REVIEW_OVER_SESSION_LENGTH,)
-    assert b.credits == D("1.00")
+    assert b.attendance_credits == D("1.00")
 
 
 def test_attendance_without_any_evaluation_is_not_flagged(event, person):
@@ -392,7 +392,7 @@ def test_attendance_without_any_evaluation_is_not_flagged(event, person):
 
 def test_nothing_at_all(event, person):
     b = credit_breakdown(person, event)
-    assert (b.minutes, b.source, b.needs_review, b.credits) == (0, None, False, D("0.00"))
+    assert (b.minutes, b.source, b.needs_review, b.attendance_credits) == (0, None, False, D("0.00"))
 
 
 # --- Adjustments -------------------------------------------------------------
@@ -405,7 +405,7 @@ def test_adjustments_are_a_ledger_added_to_the_computed_credit(person):
     adjust(person, event, "0.50")
     adjust(person, event, "-0.25")
     b = credit_breakdown(person, event)
-    assert (b.computed_credits, b.adjustment_credits, b.credits) == (D("0.50"), D("0.25"), D("0.75"))
+    assert (b.attendance_computed, b.attendance_adjustment, b.attendance_credits) == (D("0.50"), D("0.25"), D("0.75"))
     assert adjustment_credits(person, make_event()) == D("0.00")
 
 
@@ -414,7 +414,7 @@ def test_an_adjustment_can_grant_credit_the_gate_withheld(person):
     teams_row(event, person, 0, 60)
     adjust(person, event, "1.00", reason="Evaluation form was down; chair approved")
     b = credit_breakdown(person, event)
-    assert (b.computed_credits, b.credits) == (D("0.00"), D("1.00"))
+    assert (b.attendance_computed, b.attendance_credits) == (D("0.00"), D("1.00"))
 
 
 def test_credit_never_goes_below_zero(event, person):

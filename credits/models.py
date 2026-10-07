@@ -151,6 +151,11 @@ class EvaluationWindow(FrozenFieldsMixin, UUIDModel):
         return self.closed_at is None and self.opened_at <= at < self.expires_at
 
 
+class CreditKind(models.TextChoices):
+    ATTENDANCE = "attendance", "Attendance"
+    TEACHING = "teaching", "Teaching"
+
+
 class CreditAdjustment(AppendOnlyMixin, UUIDModel):
     """
     A ledger entry that changes someone's credit for an event without
@@ -166,6 +171,12 @@ class CreditAdjustment(AppendOnlyMixin, UUIDModel):
     )
     event = models.ForeignKey(
         RoundsEvent, on_delete=models.PROTECT, related_name="credit_adjustments"
+    )
+    kind = models.CharField(
+        max_length=20,
+        choices=CreditKind.choices,
+        default=CreditKind.ATTENDANCE,
+        help_text="Which kind of credit this changes. They are never blended.",
     )
     delta_credits = models.DecimalField(
         max_digits=5,

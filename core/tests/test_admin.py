@@ -298,25 +298,53 @@ def test_a_row_already_superseded_cannot_be_replaced_again(client, boss, seeded)
 # --- Uploads, adjustments, declarations --------------------------------------
 
 
-def test_uploading_an_export_stores_it_and_refuses_it_twice(client, boss, seeded, settings):
-    first = seeded[0]
-    content = b"Meeting Summary\r\nsynthetic test bytes\r\n"
+def fixture_event():
+    """An event matching the real fixture: 2026-09-10, 9:00 to 12:00, same Teams title."""
+    from attendance.tests.test_teams import make_fixture_event
 
-    def post():
+    return make_fixture_event()
+
+
+def test_uploading_an_export_stores_it_and_refuses_it_twice(client, boss, seeded, settings):
+    from attendance.tests.test_teams import FIXTURE
+
+    event = fixture_event()
+    content = FIXTURE.read_bytes()
+
+    def post(event_pk=""):
         return client.post(
             url(AttendanceUpload, "add"),
-            {"event": first.pk, "file": SimpleUploadedFile("export.csv", content)},
+            {"event": event_pk, "file": SimpleUploadedFile("teams-export.csv", content)},
         )
 
-    assert post().status_code == 302
-    upload = AttendanceUpload.objects.get(original_filename="export.csv")
-    assert upload.uploaded_by == boss
+    response = post()  # no event chosen: found by title and date
+    assert response.status_code == 302, response.context["adminform"].form.errors
+    upload = AttendanceUpload.objects.get(original_filename="teams-export.csv")
+    assert (upload.event, upload.uploaded_by, upload.row_count) == (event, boss, 12)
     assert (settings.UPLOAD_ROOT / upload.stored_path).read_bytes() == content
-    again = post()
+    assert upload.records.count() == 12
+    again = post(event.pk)
     assert again.status_code == 200
     assert "already uploaded" in str(again.context["adminform"].form.errors)
-    assert client.get(url(AttendanceUpload, "change", upload.pk)).status_code == 200
+    page = client.get(url(AttendanceUpload, "change", upload.pk)).content.decode()
+    assert "Parser warnings" in page
     assert client.get(url(AttendanceUpload, "delete", upload.pk)).status_code == 403
+
+
+def test_an_export_for_another_event_is_refused_and_nothing_is_stored(client, boss, seeded, settings):
+    from attendance.tests.test_teams import FIXTURE
+
+    wrong = seeded[0]  # a different date
+    response = client.post(
+        url(AttendanceUpload, "add"),
+        {"event": wrong.pk, "file": SimpleUploadedFile("teams-export.csv", FIXTURE.read_bytes())},
+    )
+    assert response.status_code == 200
+    assert "Is this the right event" in str(response.context["adminform"].form.errors)
+    assert not AttendanceUpload.objects.filter(original_filename="teams-export.csv").exists()
+    teams_dir = settings.UPLOAD_ROOT / "teams"
+    stored = list(teams_dir.glob("*")) if teams_dir.exists() else []
+    assert len(stored) == AttendanceUpload.objects.count()  # no file without its row
 
 
 def test_a_credit_adjustment_records_who_and_why_and_is_then_frozen(client, boss, seeded):
@@ -324,7 +352,8 @@ def test_a_credit_adjustment_records_who_and_why_and_is_then_frozen(client, boss
     roy = who("Roy")
     response = client.post(
         url(CreditAdjustment, "add"),
-        {"person": roy.pk, "event": first.pk, "delta_credits": "0.50", "reason": "Chair approved"},
+        {"person": roy.pk, "event": first.pk, "kind": "attendance", "delta_credits": "0.50",
+         "reason": "Chair approved"},
     )
     assert response.status_code == 302, response.context["adminform"].form.errors
     adjustment = CreditAdjustment.objects.get(person=roy)
@@ -334,13 +363,15 @@ def test_a_credit_adjustment_records_who_and_why_and_is_then_frozen(client, boss
     ).exists()
     client.post(
         url(CreditAdjustment, "change", adjustment.pk),
-        {"person": roy.pk, "event": first.pk, "delta_credits": "9.00", "reason": "edited"},
+        {"person": roy.pk, "event": first.pk, "kind": "attendance", "delta_credits": "9.00",
+         "reason": "edited"},
     )
     adjustment.refresh_from_db()
     assert str(adjustment.delta_credits) == "0.50"
     bad = client.post(
         url(CreditAdjustment, "add"),
-        {"person": roy.pk, "event": first.pk, "delta_credits": "0", "reason": "does nothing"},
+        {"person": roy.pk, "event": first.pk, "kind": "attendance", "delta_credits": "0",
+         "reason": "does nothing"},
     )
     assert bad.status_code == 200 and bad.context["adminform"].form.errors
 
@@ -523,7 +554,7 @@ def test_a_closed_event_cannot_be_reopened_from_the_admin(client, boss, seeded):
             "end_at_0": "2026-09-08",
             "end_at_1": "15:00:00",
             "teams_join_url": "",
-            "teams_meeting_id": "",
+            "teams_meeting_title": "",
             "sessions-TOTAL_FORMS": 0,
             "sessions-INITIAL_FORMS": 0,
         },
@@ -576,7 +607,7 @@ def test_adding_an_event_needs_only_a_start_and_three_titles(client, boss, seede
             "end_at_0": "",
             "end_at_1": "",
             "teams_join_url": "https://teams.microsoft.com/meet/demo",
-            "teams_meeting_id": "",
+            "teams_meeting_title": "",
             "sessions-TOTAL_FORMS": 3,
             "sessions-INITIAL_FORMS": 0,
             "sessions-0-position": 1,

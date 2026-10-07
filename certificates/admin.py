@@ -15,9 +15,10 @@ class CertificateLineInline(admin.TabularInline):
         "session_titles",
         "attended_minutes",
         "minutes_source",
-        "computed_credits",
-        "adjustment_credits",
-        "credits",
+        "attendance_credits",
+        "presented_session_titles",
+        "teaching_minutes",
+        "teaching_credits",
     ]
     readonly_fields = fields
 
@@ -58,6 +59,8 @@ class CertificateAdmin(ReadOnlyAdmin):
         "certificate_type",
         "period_start",
         "period_end",
+        "attendance_credits",
+        "teaching_credits",
         "total_credits",
         "issued_at",
         "state",

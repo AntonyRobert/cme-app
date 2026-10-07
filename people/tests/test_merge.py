@@ -90,6 +90,8 @@ def test_every_kind_of_row_follows_the_merge(pair, staff):
         certificate_type="cme",
         period_start=datetime.date(2026, 1, 1),
         period_end=datetime.date(2026, 12, 31),
+        attendance_credits=Decimal("1.00"),
+        teaching_credits=Decimal("0.00"),
         total_credits=Decimal("1.00"),
         recipient_name="Marie Tremblay",
         template_version="1",

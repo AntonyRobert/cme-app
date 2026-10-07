@@ -27,6 +27,8 @@ def issue(person=None, **extra):
         certificate_type=certificate_type_for(person),
         period_start=datetime.date(2026, 1, 1),
         period_end=datetime.date(2026, 12, 31),
+        attendance_credits=extra.get("total_credits", Decimal("1.00")),
+        teaching_credits=Decimal("0.00"),
         total_credits=extra.pop("total_credits", Decimal("1.00")),
         recipient_name=person.full_name,
         template_version="2026-1",
@@ -43,8 +45,8 @@ def line(certificate, event=None, **extra):
         session_titles=["One", "Two", "Three"],
         attended_minutes=60,
         minutes_source="teams",
-        computed_credits=Decimal("1.00"),
-        credits=Decimal("1.00"),
+        attendance_computed=Decimal("1.00"),
+        attendance_credits=Decimal("1.00"),
     )
     values.update(extra)
     return CertificateLine.objects.create(certificate=certificate, event=event, **values)
@@ -109,6 +111,7 @@ def test_each_certificate_gets_its_own_code():
     "field, value",
     [
         ("total_credits", Decimal("99.00")),
+        ("teaching_credits", Decimal("9.00")),
         ("recipient_name", "Someone Else"),
         ("licence_number", "99999"),
         ("verification_code", "AAAA-AAAA-AAAA"),
@@ -179,7 +182,7 @@ def test_lines_are_one_per_event_and_frozen():
     row = line(certificate, event)
     with pytest.raises(IntegrityError), transaction.atomic():
         line(certificate, event)
-    row.credits = Decimal("5.00")
+    row.attendance_credits = Decimal("5.00")
     with pytest.raises(ImmutableRowError):
         row.save()
 

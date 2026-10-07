@@ -15,10 +15,11 @@ def evaluate(person, session, *, minutes=20, complete=True, **extra):
     )
 
 
-def adjust(person, event, delta, reason="Goodwill, approved by the chair", user=None):
+def adjust(person, event, delta, reason="Goodwill, approved by the chair", user=None, kind="attendance"):
     return CreditAdjustment.objects.create(
         person=person,
         event=event,
+        kind=kind,
         delta_credits=Decimal(delta),
         reason=reason,
         created_by=user or make_staff(),

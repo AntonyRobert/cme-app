@@ -151,6 +151,10 @@ COI_CURRENT_VERSION = "2026-10"
 # A declaration is valid for this long after it was made, rolling.
 COI_VALIDITY_DAYS = 365
 
+# Credits per hour, by kind. Tracked and reported separately even while the
+# rates are equal: a blended figure can't be split later.
+CREDIT_RATES_PER_HOUR = {"attendance": "1.0", "teaching": "1.0"}
+
 # The evaluation form is open this many days after the event date, and a
 # reopening lasts this long again.
 EVALUATION_WINDOW_DAYS = 7

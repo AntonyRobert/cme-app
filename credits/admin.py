@@ -169,13 +169,13 @@ class CreditAdjustmentAdmin(AppendOnlyAdmin):
     isn't. If the hours are wrong, correct the attendance instead.
     """
 
-    list_display = ["person", "event", "delta_credits", "short_reason", "created_by", "created_at"]
-    list_filter = ["event"]
+    list_display = ["person", "event", "kind", "delta_credits", "short_reason", "created_by", "created_at"]
+    list_filter = ["kind", "event"]
     date_hierarchy = "created_at"
     search_fields = ["person__family_name", "person__given_name", "reason"]
     list_select_related = ["person", "event", "created_by"]
     autocomplete_fields = ["person"]
-    fields = ["person", "event", "delta_credits", "reason", "created_by", "created_at"]
+    fields = ["person", "event", "kind", "delta_credits", "reason", "created_by", "created_at"]
     readonly_fields = ["created_by", "created_at"]
 
     def get_fields(self, request, obj=None):
@@ -196,6 +196,7 @@ class CreditAdjustmentAdmin(AppendOnlyAdmin):
             metadata={
                 "person": str(obj.person_id),
                 "event": str(obj.event_id),
+                "kind": obj.kind,
                 "delta_credits": obj.delta_credits,
                 "reason": obj.reason,
             },
