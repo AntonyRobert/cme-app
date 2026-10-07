@@ -12,7 +12,7 @@ from django.urls import reverse
 from attendance.aggregation import attended_minutes
 from attendance.models import AttendanceRecord, AttendanceSupersession, AttendanceUpload
 from audit.models import AuditLog
-from credits.models import CreditAdjustment, EvaluationSubmission
+from credits.models import CreditAdjustment, EvaluationSubmission, EvaluationWindow
 from people.models import Person, PersonEmail
 from rounds.models import COIDeclaration, RoundsEvent
 
@@ -48,7 +48,7 @@ def who(family):
 
 def test_every_admin_page_renders(client, boss, seeded):
     models = [m for m in admin.site._registry if m._meta.app_label in OUR_APPS]
-    assert len(models) == 13
+    assert len(models) == 14
     for model in models:
         model_admin = admin.site._registry[model]
         assert client.get(url(model, "changelist")).status_code == 200, model
@@ -91,7 +91,8 @@ def test_event_page_shows_live_credit_per_person(client, boss, seeded):
     page = client.get(url(RoundsEvent, "change", seeded[0].pk)).content.decode()
     assert "Côté" in page and "0.75" in page
     assert "Review: self-reported only" in page  # Morin
-    assert "Missing" in page  # Okafor's incomplete evaluation
+    assert "0/3" in page  # Okafor has evaluated nothing completely
+    assert "+0.75" in page  # his adjustment
 
 
 def test_person_autocomplete_never_offers_a_tombstone(client, boss, seeded):
@@ -137,7 +138,7 @@ def test_matching_from_the_unmatched_list(client, boss, seeded):
     assert response.status_code == 200
     assert not AttendanceRecord.objects.unmatched().filter(event=second).exists()
     assert PersonEmail.objects.get(email="lea.bouchard@hospital.example").person == bouchard
-    assert attended_minutes(bouchard, second).minutes == 66
+    assert attended_minutes(bouchard, second).minutes == 178
     entry = AuditLog.objects.filter(action="attendance.matched", actor_user=boss).first()
     assert entry is not None
     messages = [str(m) for m in response.context["messages"]]
@@ -189,6 +190,7 @@ def manual_form(event, person, **fields):
         "leave_at_0": "",
         "leave_at_1": "",
         "duration_minutes": "",
+        "session": "",
         "reason": "Chair confirms attendance",
         "supersedes-TOTAL_FORMS": 0,
         "supersedes-INITIAL_FORMS": 0,
@@ -202,12 +204,19 @@ def manual_form(event, person, **fields):
 def test_adding_an_hours_only_manual_row(client, boss, seeded):
     first = seeded[0]
     roy = who("Roy")
+    session = first.sessions.order_by("start_at").first()
     response = client.post(
-        url(AttendanceRecord, "add"), manual_form(first, roy, duration_minutes="20")
+        url(AttendanceRecord, "add"),
+        manual_form(first, roy, duration_minutes="20", session=session.pk),
     )
     assert response.status_code == 302, response.context["adminform"].form.errors
     row = AttendanceRecord.objects.filter(person=roy, source="manual").get()
-    assert (row.duration_seconds, row.join_at, row.created_by) == (20 * 60, None, boss)
+    assert (row.duration_seconds, row.join_at, row.session, row.created_by) == (
+        20 * 60,
+        None,
+        session,
+        boss,
+    )
     assert (row.match_method, row.matched_by) == ("manual", boss)
     assert AuditLog.objects.filter(
         action="attendance.manual_row_created", object_id=str(row.pk), actor_user=boss
@@ -218,12 +227,15 @@ def test_a_manual_row_needs_a_reason_and_a_duration(client, boss, seeded):
     first = seeded[0]
     roy = who("Roy")
     count = AttendanceRecord.objects.count()
+    session = first.sessions.order_by("start_at").first()
     for bad in (
-        manual_form(first, roy, duration_minutes="20", reason=""),
+        manual_form(first, roy, duration_minutes="20", session=session.pk, reason=""),
         manual_form(first, roy),
-        manual_form(first, roy, duration_minutes="20", join_at_0="2026-09-15", join_at_1="12:00:00",
+        manual_form(first, roy, duration_minutes="20"),  # minutes without a session
+        manual_form(first, roy, duration_minutes="20", session=session.pk,
+                    join_at_0="2026-09-15", join_at_1="12:00:00",
                     leave_at_0="2026-09-15", leave_at_1="12:30:00"),
-        manual_form(first, roy, source="teams_upload", duration_minutes="20"),
+        manual_form(first, roy, source="teams_upload", duration_minutes="20", session=session.pk),
     ):
         response = client.post(url(AttendanceRecord, "add"), bad)
         assert response.status_code == 200  # redisplayed with errors, not a crash
@@ -243,22 +255,26 @@ def test_adding_a_room_roster_row_copies_the_device_times(client, boss, seeded):
     assert response.status_code == 302, response.context["adminform"].form.errors
     row = AttendanceRecord.objects.get(person=morin, source="room_roster")
     assert (row.join_at, row.leave_at) == (device.join_at, device.leave_at)
-    assert attended_minutes(morin, first).minutes == 58
+    assert attended_minutes(morin, first).minutes == 174  # 12:03 to 14:57
 
 
 def test_a_correction_added_in_the_admin_replaces_the_rows_it_names(client, boss, seeded):
     first = seeded[0]
     cote = who("Côté")
     rejoins = list(AttendanceRecord.objects.filter(event=first, person=cote))
-    assert attended_minutes(cote, first).minutes == 57
-    data = manual_form(first, cote, duration_minutes="60", reason="Teams dropped him twice")
+    assert attended_minutes(cote, first).minutes == 171
+    first_session = first.sessions.order_by("start_at").first()
+    data = manual_form(
+        first, cote, duration_minutes="60", session=first_session.pk,
+        reason="Teams dropped him twice; he was in the room for the whole first talk",
+    )
     data["supersedes-TOTAL_FORMS"] = len(rejoins)
     for index, old in enumerate(rejoins):
         data[f"supersedes-{index}-old"] = str(old.pk)
     response = client.post(url(AttendanceRecord, "add"), data)
     assert response.status_code == 302, response.context["adminform"].form.errors
     assert AttendanceSupersession.objects.filter(old__in=rejoins, created_by=boss).count() == 3
-    assert attended_minutes(cote, first).minutes == 60
+    assert [s.minutes for s in attended_minutes(cote, first).sessions] == [60, 0, 0]
     assert AuditLog.objects.filter(action="attendance.superseded", actor_user=boss).count() == 1
 
 
@@ -266,7 +282,9 @@ def test_a_row_already_superseded_cannot_be_replaced_again(client, boss, seeded)
     first = seeded[0]
     sharma = who("Sharma")
     old = AttendanceRecord.objects.superseded().filter(person=sharma).first()
-    data = manual_form(first, sharma, duration_minutes="60")
+    data = manual_form(
+        first, sharma, duration_minutes="60", session=first.sessions.order_by("start_at").first().pk
+    )
     data["supersedes-TOTAL_FORMS"] = 1
     data["supersedes-0-old"] = str(old.pk)
     response = client.post(url(AttendanceRecord, "add"), data)
@@ -404,7 +422,7 @@ def test_merge_with_a_collision_is_refused_and_shows_both_rows(client, boss, see
     main, duplicate = Person.objects.filter(family_name="Tremblay").order_by("created_at")
     theirs = EvaluationSubmission.objects.filter(person=main, session__event=seeded[1]).get()
     EvaluationSubmission.objects.create(
-        person=duplicate, session=theirs.session, self_reported_minutes=70, attestation=True
+        person=duplicate, session=theirs.session, self_reported_session_minutes=70, attestation=True
     )
     page = merge_post(client, [main, duplicate], confirm="1", survivor=str(main.pk))
     text = page.content.decode()
@@ -418,3 +436,101 @@ def test_merge_with_a_collision_is_refused_and_shows_both_rows(client, boss, see
         ).count()
         == 2
     )
+
+
+# --- Evaluation windows, closed events, superseded device rows --------------
+
+
+def test_staff_can_reopen_a_form_as_an_override_and_it_is_logged(client, boss, seeded):
+    first = seeded[0]
+    roy = who("Roy")
+    session = first.sessions.order_by("start_at").last()
+    response = client.post(
+        url(EvaluationWindow, "add"),
+        {"person": roy.pk, "session": session.pk, "reason": "Asked by email; audit pending"},
+    )
+    assert response.status_code == 302, response.context["adminform"].form.errors
+    window = EvaluationWindow.objects.get(person=roy, session=session)
+    assert window.granted_by == boss
+    entry = AuditLog.objects.get(action="evaluation.window_granted", object_id=str(window.pk))
+    assert (entry.actor_user, entry.metadata["override"]) == (boss, True)
+    # Frozen afterwards: no change form, no delete.
+    assert client.get(url(EvaluationWindow, "delete", window.pk)).status_code == 403
+
+
+def test_an_evaluation_entered_by_staff_needs_an_open_window(client, boss, seeded):
+    first = seeded[0]  # four weeks ago: the default week is long gone
+    roy = who("Roy")
+    session = first.sessions.order_by("start_at").last()
+    form = {
+        "person": roy.pk,
+        "session": session.pk,
+        "submitted_at_0": "2026-10-06",
+        "submitted_at_1": "12:00:00",
+        "self_reported_session_minutes": 57,
+        "attestation": "on",
+        "is_complete": "on",
+        "responses-TOTAL_FORMS": 0,
+        "responses-INITIAL_FORMS": 0,
+    }
+    refused = client.post(url(EvaluationSubmission, "add"), form)
+    assert refused.status_code == 200
+    assert "window" in str(refused.context["adminform"].form.errors)
+
+    client.post(url(EvaluationWindow, "add"), {"person": roy.pk, "session": session.pk, "reason": "x"})
+    accepted = client.post(url(EvaluationSubmission, "add"), form)
+    assert accepted.status_code == 302, accepted.context["adminform"].form.errors
+    window = EvaluationWindow.objects.get(person=roy, session=session)
+    assert window.closed_at is not None  # a complete submission closes it
+
+
+def test_a_closed_event_cannot_be_reopened_from_the_admin(client, boss, seeded):
+    first = seeded[0]
+    assert first.status == "closed"
+    response = client.post(
+        url(RoundsEvent, "change", first.pk),
+        {
+            "title": first.title,
+            "date": first.date.isoformat(),
+            "status": "draft",
+            "accredited_credits": "3.00",
+            "start_at_0": "2026-09-08",
+            "start_at_1": "12:00:00",
+            "end_at_0": "2026-09-08",
+            "end_at_1": "15:00:00",
+            "teams_join_url": "",
+            "teams_meeting_id": "",
+            "sessions-TOTAL_FORMS": 0,
+            "sessions-INITIAL_FORMS": 0,
+        },
+    )
+    assert response.status_code == 200
+    assert "status" in response.context["adminform"].form.errors
+    first.refresh_from_db()
+    assert first.status == "closed"
+
+
+def test_a_room_roster_row_warns_when_its_device_row_was_superseded(client, boss, seeded):
+    first = seeded[0]
+    device = AttendanceRecord.objects.get(event=first, raw_display_name="Conference Room B")
+    roster = AttendanceRecord.objects.filter(attributed_to=device).first()
+    page = client.get(url(AttendanceRecord, "change", roster.pk)).content.decode()
+    assert "was superseded" not in page
+    correction = manual_form(
+        first, who("Lavoie"), duration_minutes="30",
+        session=first.sessions.order_by("start_at").first().pk,
+        reason="The room device's times were wrong",
+    )
+    correction["supersedes-TOTAL_FORMS"] = 1
+    correction["supersedes-0-old"] = str(device.pk)
+    assert client.post(url(AttendanceRecord, "add"), correction).status_code == 302
+    page = client.get(url(AttendanceRecord, "change", roster.pk)).content.decode()
+    assert "was superseded" in page
+    listing = client.get(url(AttendanceRecord, "changelist") + "?source__exact=room_roster").content.decode()
+    assert listing.count("was superseded") == 2  # both people behind the device
+
+
+def test_person_page_shows_earned_versus_certified(client, boss, seeded):
+    page = client.get(url(Person, "change", who("Haddad").pk)).content.decode()
+    assert "Credit, earned versus certified" in page
+    assert "not yet certified" in page

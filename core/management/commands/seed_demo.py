@@ -22,6 +22,7 @@ from attendance.models import AttendanceRecord
 from attendance.services import log_manual_row, store_upload, supersede_rows
 from audit.log import record
 from credits.models import CreditAdjustment, EvaluationResponse, EvaluationSubmission
+from credits.windows import request_reopening
 from people.models import AllowedDomain, Person, PersonEmail
 from rounds.models import (
     COIDeclaration,
@@ -84,29 +85,29 @@ class Command(BaseCommand):
         return person
 
     def event(self, days_ago, status, ran_over_minutes=0):
+        """Noon to three, Montreal time: three one-hour sessions, 3.00 credits."""
         zone = ZoneInfo(settings.TIME_ZONE)
         day = timezone.localdate() - datetime.timedelta(days=days_ago)
         start = datetime.datetime.combine(day, datetime.time(12, 0), tzinfo=zone)
-        end = start + datetime.timedelta(minutes=60)
         return RoundsEvent.objects.create(
             date=day,
             start_at=start,
-            end_at=end,
-            actual_end_at=end + datetime.timedelta(minutes=ran_over_minutes)
-            if ran_over_minutes
-            else None,
+            end_at=start + datetime.timedelta(minutes=180 + ran_over_minutes),
             status=status,
-            accredited_credits=Decimal("1.00"),
+            accredited_credits=Decimal("3.00"),
             teams_join_url="https://teams.example/l/meetup-join/demo",
         )
 
-    def session(self, event, position, title, presenters, objectives):
+    def session(self, event, position, title, presenters, objectives, ran_over_minutes=0):
+        """Session `position` fills its hour: 12:00, 13:00 or 14:00."""
+        start = event.start_at + datetime.timedelta(hours=position - 1)
         session = Session.objects.create(
             event=event,
             position=position,
             title=title,
-            duration_minutes=20,
-            published_blurb=f"A 20-minute talk: {title}.",
+            start_at=start,
+            end_at=start + datetime.timedelta(minutes=60 + ran_over_minutes),
+            published_blurb=f"A one-hour talk: {title}.",
             submitted_at=event.start_at - datetime.timedelta(days=5),
         )
         for order, presenter in enumerate(presenters, start=1):
@@ -154,7 +155,7 @@ class Command(BaseCommand):
             person=person,
             session=session,
             submitted_at=session.event.end_at + datetime.timedelta(hours=3),
-            self_reported_minutes=minutes,
+            self_reported_session_minutes=minutes,
             attestation=True,
             is_complete=complete,
         )
@@ -225,7 +226,7 @@ class Command(BaseCommand):
             self.declare(presenter)
 
         first = self.event(days_ago=28, status=RoundsEvent.Status.CLOSED)
-        second = self.event(days_ago=14, status=RoundsEvent.Status.HELD, ran_over_minutes=10)
+        second = self.event(days_ago=14, status=RoundsEvent.Status.HELD, ran_over_minutes=5)
 
         a1 = self.session(
             first, 1, "Sepsis alerts: what the audit showed", [gagnon],
@@ -247,73 +248,79 @@ class Command(BaseCommand):
             second, 2, "Dashboards nobody opens", [sharma, gagnon],  # co-presenters
             ["Explain why dashboards go unused", "Choose one metric worth showing"],
         )
+        # The last talk ran five minutes over; its end time says so.
         b3 = self.session(
             second, 3, "Ambient scribes: early lessons", [haddad],
             ["Summarize the pilot results", "Discuss consent for ambient recording"],
+            ran_over_minutes=5,
         )
 
-        # ===== First event: 12:00 to 13:00, counts from 11:55 =====
+        # ===== First event: 12:00, 13:00 and 14:00, an hour each =====
         up1 = self.upload(first, "first demo event")
         t = self.teams
 
-        # Whole event on one connection. 1.00 credit.
-        t(first, up1, "Tremblay, Marie", -2, 61, tremblay, "marie.tremblay@example.org")
-        # Three rejoins adding up to 57 minutes. Rounds down to 0.75.
-        for start, end in ((0, 14), (16, 40), (41, 60)):
-            t(first, up1, "Côté, Jean-François", start, end, cote, "jf.cote@example.org", "Presenter")
-        # Laptop and phone at the same time. Counted once: 60 minutes, not 85.
-        t(first, up1, "Haddad, Amira", 0, 60, haddad, "amira.haddad@example.org")
-        t(first, up1, "Amira (phone)", 20, 45, haddad, "amira.haddad@example.org")
-        # In the lobby from 11:40, left at 12:31. Only 11:55 onward counts: 36 minutes.
-        t(first, up1, "Nguyen, Sophie", -20, 31, nguyen, "sophie.nguyen@example.org")
-        # 55 minutes, but his evaluation is incomplete: no computed credit.
-        t(first, up1, "Okafor, David", 5, 60, okafor, "david.okafor@example.org")
-        t(first, up1, "Bouchard, Léa", 0, 60, bouchard, "lea.bouchard@example.org")
-        t(first, up1, "Gagnon, Marc", 0, 60, gagnon, "marc.gagnon@example.org", "Presenter")
+        # Whole event on one connection, evaluated every session: 3.00.
+        t(first, up1, "Tremblay, Marie", -2, 181, tremblay, "marie.tremblay@example.org")
+        # Three rejoins. Session 1 comes to 54 minutes, one short of counting
+        # in full; only session 1 is evaluated: 0.75.
+        for start_min, end_min in ((0, 42), (48, 120), (123, 180)):
+            t(first, up1, "Côté, Jean-François", start_min, end_min, cote, "jf.cote@example.org", "Presenter")
+        # Laptop and phone at the same time. Counted once. Two sessions evaluated: 2.00.
+        t(first, up1, "Haddad, Amira", 0, 180, haddad, "amira.haddad@example.org")
+        t(first, up1, "Amira (phone)", 60, 135, haddad, "amira.haddad@example.org")
+        # In the lobby from 11:40, left at 13:33. Session 1 in full (the five
+        # minutes before noon count, the rest of the wait does not): 1.00.
+        t(first, up1, "Nguyen, Sophie", -20, 93, nguyen, "sophie.nguyen@example.org")
+        # Joined a quarter past. His only evaluation is incomplete: no computed credit.
+        t(first, up1, "Okafor, David", 15, 180, okafor, "david.okafor@example.org")
+        t(first, up1, "Bouchard, Léa", 0, 180, bouchard, "lea.bouchard@example.org")
+        t(first, up1, "Gagnon, Marc", 0, 180, gagnon, "marc.gagnon@example.org", "Presenter")
 
         # A meeting-room device with two people behind it.
-        room = t(first, up1, "Conference Room B", 1, 59)
+        room = t(first, up1, "Conference Room B", 3, 177)
         self.by_hand(
             source=Source.ROOM_ROSTER, event=first, attributed_to=room, person=lavoie,
             reason="On the Room B sign-in sheet",
         )
         self.by_hand(
             source=Source.ROOM_ROSTER, event=first, attributed_to=room, person=roy,
-            join_at=first.start_at + datetime.timedelta(minutes=25), leave_at=room.leave_at,
-            reason="On the Room B sign-in sheet; arrived 12:25",
+            join_at=first.start_at + datetime.timedelta(minutes=75), leave_at=room.leave_at,
+            reason="On the Room B sign-in sheet; arrived 13:15",
         )
 
         # Teams only saw her laptop for two short stretches while she presented
-        # from the podium PC. One manual row replaces both.
+        # the second session from the podium PC. One manual row replaces both.
         short_rows = [
-            t(first, up1, "Sharma, Priya", 0, 10, sharma, "priya.sharma@example.org", "Presenter"),
-            t(first, up1, "Sharma, Priya", 50, 60, sharma, "priya.sharma@example.org", "Presenter"),
+            t(first, up1, "Sharma, Priya", 60, 70, sharma, "priya.sharma@example.org", "Presenter"),
+            t(first, up1, "Sharma, Priya", 110, 120, sharma, "priya.sharma@example.org", "Presenter"),
         ]
         correction = self.by_hand(
-            source=Source.MANUAL, event=first, person=sharma, duration_seconds=55 * 60,
+            source=Source.MANUAL, event=first, session=a2, person=sharma,
+            duration_seconds=55 * 60,
             reason="Presented from the podium PC; Teams only captured her laptop. Chair confirms.",
         )
         supersede_rows(short_rows, correction, user=self.staff)
+        t(first, up1, "Sharma, Priya", 120, 180, sharma, "priya.sharma@example.org")
 
         # The review queue: rows nobody could be matched to.
-        t(first, up1, "iPhone de Marc", 2, 58)
-        t(first, up1, "S. External", 0, 60, email="s.external@elsewhere.example")
+        t(first, up1, "iPhone de Marc", 6, 174)
+        t(first, up1, "S. External", 0, 180, email="s.external@elsewhere.example")
 
         ev = self.evaluate
         for session in (a1, a2, a3):
-            ev(tremblay, session, comment="Very practical.")
+            ev(tremblay, session, minutes=60, comment="Very practical.")
             # Morin has no attendance row at all: credit rests on his self-report
             # and is flagged for review.
-            ev(morin, session)
-        ev(cote, a1)
-        ev(haddad, a1)
-        ev(haddad, a2)
-        ev(nguyen, a1)
-        ev(okafor, a2, complete=False)
-        ev(bouchard, a3)
-        ev(lavoie, a1)
-        ev(sharma, a3)
-        ev(gagnon, a2)
+            ev(morin, session, minutes=60)
+        ev(cote, a1, minutes=55)
+        ev(haddad, a1, minutes=60)
+        ev(haddad, a2, minutes=60)
+        ev(nguyen, a1, minutes=60)
+        ev(okafor, a2, minutes=60, complete=False)
+        ev(bouchard, a3, minutes=60)
+        ev(lavoie, a1, minutes=60)
+        ev(sharma, a3, minutes=60)
+        ev(gagnon, a2, minutes=60)
 
         # The hours are right and the credit still isn't: that is what an adjustment is for.
         adjustment = CreditAdjustment.objects.create(
@@ -325,43 +332,49 @@ class Command(BaseCommand):
             metadata={"delta_credits": adjustment.delta_credits, "reason": adjustment.reason},
         )
 
-        # ===== Second event: scheduled to 13:00, ran to 13:10 =====
+        # Bouchard attended all three but only evaluated the third; she asked
+        # for another week on the first.
+        request_reopening(bouchard, a1, reason="Was on call the week after")
+
+        # ===== Second event: the third talk ran to 15:05 =====
         up2 = self.upload(second, "second demo event")
 
         # Her Teams rows landed on the duplicate record, her evaluation on the
         # main one. Until the two are merged, the duplicate has minutes but no
         # evaluation, and the main record's credit rests on her self-report
         # (flagged for review).
-        t(second, up2, "Marie Tremblay", 0, 70, tremblay_dup, "m.tremblay@example.com")
+        t(second, up2, "Marie Tremblay", 0, 185, tremblay_dup, "m.tremblay@example.com")
         ev(tremblay, b1, minutes=60, comment="Would like the dosing table as a handout.")
 
-        # Stayed for the overrun. 70 minutes, capped at the accredited 1.00.
-        t(second, up2, "Côté, Jean-François", 0, 70, cote, "jf.cote@example.org")
-        t(second, up2, "Haddad, Amira", 0, 70, haddad, "amira.haddad@example.org", "Presenter")
-        t(second, up2, "Sharma, Priya", 0, 70, sharma, "priya.sharma@example.org", "Presenter")
-        t(second, up2, "Gagnon, Marc", 0, 70, gagnon, "marc.gagnon@example.org", "Presenter")
-        t(second, up2, "Nguyen, Sophie", 0, 65, nguyen, "sophie.nguyen@example.org")
+        # Stayed for the overrun. Session 3 is 65 minutes long now.
+        t(second, up2, "Côté, Jean-François", 0, 190, cote, "jf.cote@example.org")
+        t(second, up2, "Haddad, Amira", 0, 190, haddad, "amira.haddad@example.org", "Presenter")
+        t(second, up2, "Sharma, Priya", 0, 190, sharma, "priya.sharma@example.org", "Presenter")
+        t(second, up2, "Gagnon, Marc", 0, 190, gagnon, "marc.gagnon@example.org", "Presenter")
+        t(second, up2, "Nguyen, Sophie", 0, 170, nguyen, "sophie.nguyen@example.org")
 
-        # Laptop died after 20 minutes; phoned in for the rest. An hours-only
-        # manual row adds on top: 50 minutes from mixed sources.
+        # Laptop died twenty minutes into the first talk; phoned in for the rest
+        # of it. An hours-only manual row for that session adds on top.
         t(second, up2, "Okafor, David", 0, 20, okafor, "david.okafor@example.org", "Presenter")
         self.by_hand(
-            source=Source.MANUAL, event=second, person=okafor, duration_seconds=30 * 60,
-            reason="Laptop died at 12:20; phoned in for the rest. Chair confirms.",
+            source=Source.MANUAL, event=second, session=b1, person=okafor,
+            duration_seconds=40 * 60,
+            reason="Laptop died at 12:20; phoned in for the rest of the talk. Chair confirms.",
         )
 
         # Three rejoins from an address not on file. Match one in the review
         # queue and the other two follow.
-        for start, end in ((0, 22), (24, 47), (49, 70)):
-            t(second, up2, "Lea B.", start, end, email="Lea.Bouchard@hospital.example")
+        for start_min, end_min in ((0, 66), (72, 141), (147, 190)):
+            t(second, up2, "Lea B.", start_min, end_min, email="Lea.Bouchard@hospital.example")
 
-        # Recorded 30 minutes, claims 60. Flagged because they differ by more than 15.
+        # Recorded 30 minutes of the first talk, claims 60. Flagged because
+        # the claim is more than 15 minutes above the record.
         t(second, up2, "Lavoie, Chantal", 0, 30, lavoie, "chantal.lavoie@example.org")
         ev(lavoie, b1, minutes=60)
 
-        ev(cote, b1)
-        ev(haddad, b2)
-        ev(okafor, b3)
-        ev(nguyen, b2)
-        ev(sharma, b1)
-        ev(gagnon, b3)
+        ev(cote, b1, minutes=60)
+        ev(haddad, b2, minutes=60)
+        ev(okafor, b1, minutes=60)
+        ev(nguyen, b2, minutes=60)
+        ev(sharma, b1, minutes=60)
+        ev(gagnon, b3, minutes=65)
