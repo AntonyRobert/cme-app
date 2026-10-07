@@ -193,6 +193,15 @@ listed). Nothing pushed.
   worse than one that works: the view checks the window, validates required questions,
   writes the submission against the resolved version, and shows a complete one read-only
   with its own wording. The email that links to it is still step 5.
+- **Your six fixes to server-setup.sh, before its first run.** Runs from a bootstrap
+  clone (it installs the files beside it; a check refuses to run otherwise); the first
+  run is documented as expected to fail at the clone until the owner user's key is on
+  GitHub, and the README says to remove the bootstrap key afterwards; `/srv/cme` is
+  root 0755 with only the tenant directory scoped; Ubuntu's Python 3.12 instead of a
+  PPA (CLAUDE.md and deployment.md updated; the suite is the parity check); fail2ban
+  installed with the sshd jail explicitly enabled; the ACME email is the script's 4th
+  argument. `grants.sql`'s audit revoke is pinned by a test, including that it runs
+  after the blanket grant.
 - **Two OS users per tenant**, not one: `cme_<org>_owner` (migrate, owns the checkout)
   and `cme_<org>` (gunicorn, owns uploads). Peer auth maps each to its role, so the only
   way to run DDL is to be the owner user, and the serving process never is.

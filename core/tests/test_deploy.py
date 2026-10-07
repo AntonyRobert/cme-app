@@ -71,3 +71,15 @@ def test_deploy_scripts_are_committed_executable_and_take_the_org(name):
     assert 'ORG="${1:?' in text  # the org is the argument, even with one tenant
     mode = subprocess.run(["git", "ls-files", "-s", f"deploy/{name}"], cwd=ROOT, capture_output=True, text=True).stdout
     assert mode.startswith("100755"), mode
+
+
+def test_grants_sql_revokes_update_and_delete_on_the_audit_log_from_the_app_role():
+    """The append-only audit log is enforced by the database for the serving process."""
+    import re
+
+    sql = (ROOT / "deploy" / "grants.sql").read_text(encoding="utf-8")
+    statements = [line for line in sql.splitlines() if line and not line.startswith("--")]
+    grant = next(i for i, l in enumerate(statements) if re.match(r'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES', l))
+    revoke = next(i for i, l in enumerate(statements) if re.match(r'REVOKE UPDATE, DELETE, TRUNCATE ON TABLE audit_auditlog FROM :"app"', l))
+    assert revoke > grant  # the exception is applied after the blanket grant, not before it
+    assert "GRANT ALL" not in sql and "CREATE" not in sql  # no DDL rights anywhere for the app role

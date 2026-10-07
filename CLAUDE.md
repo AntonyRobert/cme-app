@@ -18,7 +18,8 @@ Single maintainer. Built to be run for years with a few hours of attention a mon
 
 ## Stack
 
-- Python 3.13, Django 5.2 LTS (not 6.x — LTS support runs to April 2028)
+- Python 3.12 on the server (Ubuntu 24.04's own; 3.13 locally is fine), Django 5.2 LTS
+  (not 6.x — LTS support runs to April 2028)
 - PostgreSQL 17, same major version locally and on the server
 - Caddy in front, gunicorn behind, systemd units, single Linux VM
 - Amazon SES over **SMTP** (not boto3 — keeps the provider swappable)

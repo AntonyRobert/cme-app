@@ -5,7 +5,7 @@ parameterized by `<org>` (today: `mcgill`), even with one tenant.
 
 | File | What |
 | --- | --- |
-| `server-setup.sh` | One-time: packages, users, Postgres roles, directories, units, Caddy. Read it first. |
+| `server-setup.sh` | One-time: packages (incl. fail2ban), users, Postgres roles, directories, deploy key and clone, units, Caddy. Read it first. Runs twice by design. |
 | `deploy.sh` | Every deploy: pull, pip, checks, migrate (as owner), grants, collectstatic, restart, smoke test. |
 | `manage.sh` | `manage.py` with the production environment, as the owner user. |
 | `grants.sql` | What the app role may do. Applied after every migrate. |
@@ -18,21 +18,35 @@ parameterized by `<org>` (today: `mcgill`), even with one tenant.
 
 1. **Lightsail console** (by hand): Ubuntu 24.04 LTS, 2 GB, `ca-central-1`; attach a
    static IP; firewall SSH (22), HTTP (80), HTTPS (443) only.
-2. **GitHub**: the repo is private. Create it, push, then (step 4) add the deploy key.
-3. SSH in as `ubuntu`, clone nothing yet; copy this directory's `server-setup.sh` over
-   (or `curl` the raw file once the repo exists), then
-   `sudo bash server-setup.sh mcgill cme.mri3.ca git@github.com:AntonyRobert/cme-app.git`.
-   It prints a **public deploy key** and stops at the clone if the key is not on the repo.
-4. Add that key on GitHub: repo → Settings → Deploy keys → Add, **read-only**. Rerun step 3.
-5. **DNS at GoDaddy**: `A` record, host `cme`, value = the static IP, TTL 600. Add it
+2. **GitHub**: the repo is private; push it.
+3. **Bootstrap clone.** The setup script installs the unit files and templates that sit
+   beside it, so it must run from a checkout. SSH in as `ubuntu` and, with any key that
+   can read the repo (a temporary deploy key for `ubuntu` is fine), clone to a scratch
+   location:
+   ```
+   git clone git@github.com:AntonyRobert/cme-app.git /tmp/cme-app
+   sudo bash /tmp/cme-app/deploy/server-setup.sh mcgill cme.mri3.ca git@github.com:AntonyRobert/cme-app.git you@example.org
+   ```
+   The last argument is the ACME email: where Let's Encrypt sends certificate expiry
+   warnings. Use an address someone reads.
+4. **The first run is expected to fail at the clone.** It generates a deploy key for the
+   owner user `cme_mcgill_owner`, prints the public half, and stops because that key is
+   not on GitHub yet. Add it: repo → Settings → Deploy keys → Add, **read-only**. Rerun
+   the same command; the clone goes through and the script finishes.
+5. **Afterwards, remove the temporary key** you used for the bootstrap clone from GitHub
+   (Settings → Deploy keys) and `rm -rf /tmp/cme-app`. The server pulls with the owner
+   user's key and nothing else from now on; one key per purpose.
+6. **DNS at GoDaddy**: `A` record, host `cme`, value = the static IP, TTL 600. Add it
    now, before the first deploy: Caddy requests the certificate as soon as the name
    resolves here, and nothing works over HTTPS until then.
-6. `sudo /srv/cme/mcgill/deploy/deploy.sh mcgill`
-7. `sudo /srv/cme/mcgill/deploy/manage.sh mcgill createsuperuser`
-8. `curl -I https://cme.mri3.ca/` should return `200` (or `302` to the admin login) with
+7. `sudo /srv/cme/mcgill/deploy/deploy.sh mcgill`
+8. `sudo /srv/cme/mcgill/deploy/manage.sh mcgill createsuperuser`
+9. `curl -I https://cme.mri3.ca/` should return `200` (or `302` to the admin login) with
    `strict-transport-security` in the headers.
 
-Routine deploys are step 6 alone.
+Routine deploys are step 7 alone.
+
+`server-setup.sh` is safe to rerun at any time; every step checks before it acts.
 
 ## Email
 

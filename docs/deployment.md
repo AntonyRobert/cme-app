@@ -47,8 +47,9 @@ cannot restore them.
 edit application files there, git stops being the truth and the next deploy silently
 overwrites a fix you forgot about.
 
-**Keep parity.** Postgres locally, not SQLite. Same Python version as the server. This is
-the rule people break first and it bites during a migration.
+**Keep parity.** Postgres locally, not SQLite, same major. Python within one minor of the
+server (3.12 on the server, 3.13 locally is fine). Postgres parity is the rule people break
+first and it bites during a migration.
 
 Pin the Postgres major version: **17** on both sides. Install it on the server from the
 PGDG apt repo rather than taking whatever Ubuntu's default repo ships, or the versions
@@ -131,8 +132,10 @@ Caddy: /etc/caddy/sites/<org>.caddy, reverse proxy <hostname> -> that socket, /s
 Postgres 17 (PGDG): database cme_<org>, peer-auth roles cme_<org>_owner and cme_<org>
 ```
 
-Ubuntu 24.04 LTS with Python 3.13 from the deadsnakes PPA (24.04 ships 3.12; parity with
-local wins over "whatever the image has").
+Ubuntu 24.04 LTS with its own Python 3.12. Django 5.2 supports 3.12 and 3.13 alike; a
+third-party PPA on a box holding accreditation records is not worth a version bump that
+changes nothing. Local development on 3.13 is fine; "same major line" is the parity that
+matters here, and the test suite is the check.
 
 ## Lightsail, by hand
 

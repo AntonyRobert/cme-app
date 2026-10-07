@@ -1,26 +1,36 @@
 #!/usr/bin/env bash
 # One-time server setup for one CME tenant. Read it before running it.
 #
-#   sudo bash server-setup.sh <org> <hostname> <git-ssh-url>
-#   e.g.  sudo bash server-setup.sh mcgill cme.mri3.ca git@github.com:AntonyRobert/cme-app.git
+# Run it from a checkout of the repo, because it installs the unit files and
+# templates that sit beside it in deploy/:
+#
+#   git clone git@github.com:AntonyRobert/cme-app.git /tmp/cme-app     # with any key that can read the repo
+#   sudo bash /tmp/cme-app/deploy/server-setup.sh <org> <hostname> <git-ssh-url> <acme-email>
+#   e.g.  sudo bash /tmp/cme-app/deploy/server-setup.sh mcgill cme.mri3.ca \
+#             git@github.com:AntonyRobert/cme-app.git you@example.org
 #
 # Ubuntu 24.04 LTS on Lightsail. Idempotent where it reasonably can be: running
-# it twice is safe. It does NOT clone the repo or deploy (that is deploy.sh), and
-# it does NOT write secrets: it creates /etc/cme/<org>.env from the template and
-# tells you what to fill in.
+# it twice is safe, and it is EXPECTED to run twice: the first run generates the
+# owner user's deploy key and stops at the clone, because that key is not on
+# GitHub yet. Add it (read-only), rerun, and the clone goes through. It writes
+# /etc/cme/<org>.env with a fresh SECRET_KEY; everything else in that file is
+# settings, not secrets.
 #
 # What it sets up, in order:
-#   1. packages: Python 3.13 (deadsnakes), git, Postgres 17 (PGDG repo), Caddy (official repo)
+#   1. packages: Python 3.12 (Ubuntu's own), git, fail2ban, Postgres 17 (PGDG repo), Caddy (official repo)
 #   2. OS users: cme_<org> (runs gunicorn, owns uploads) and cme_<org>_owner (runs migrate, owns the checkout)
 #   3. Postgres: two peer-authenticated roles matching those users, one database owned by the owner role
-#   4. directories per docs/deployment.md: /srv/cme/<org>, /etc/cme/<org>.env, /run/cme
+#   4. directories per docs/deployment.md: /srv/cme/<org>, /etc/cme/<org>.env, /run/cme; the deploy key; the clone
 #   5. systemd: cme@.service template, cme-backup@.service and .timer, /run/cme via tmpfiles
 #   6. Caddy: a site block for the hostname proxying to the tenant's socket, static files served directly
 set -euo pipefail
 
-ORG="${1:?usage: server-setup.sh <org> <hostname> <git-ssh-url>}"
-HOSTNAME_FQDN="${2:?usage: server-setup.sh <org> <hostname> <git-ssh-url>}"
-GIT_URL="${3:?usage: server-setup.sh <org> <hostname> <git-ssh-url>}"
+USAGE="usage: server-setup.sh <org> <hostname> <git-ssh-url> <acme-email>"
+ORG="${1:?$USAGE}"
+HOSTNAME_FQDN="${2:?$USAGE}"
+GIT_URL="${3:?$USAGE}"
+# Where Let's Encrypt sends certificate expiry warnings. Use an address someone reads.
+ACME_EMAIL="${4:?$USAGE}"
 
 if [[ ! "$ORG" =~ ^[a-z][a-z0-9]{1,15}$ ]]; then
   echo "org must be a short lowercase name (it becomes a unix user and a database name)" >&2
@@ -37,17 +47,38 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 say() { printf '\n==> %s\n' "$*"; }
 
+# The unit files and templates live beside this script in the repo's deploy/.
+for f in env.template cme@.service cme-backup@.service cme-backup@.timer site.caddy.template grants.sql; do
+  [[ -f "$HERE/$f" ]] || { echo "missing $HERE/$f: run this script from a checkout of the repo (see the header)" >&2; exit 1; }
+done
+
 # --- 1. Packages ---------------------------------------------------------------------
 say "Packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
-apt-get install -y -q ca-certificates curl gnupg lsb-release software-properties-common git \
-  build-essential libpq-dev unattended-upgrades
+apt-get install -y -q ca-certificates curl gnupg lsb-release git build-essential libpq-dev \
+  unattended-upgrades fail2ban
 
-# Python 3.13: Ubuntu 24.04 ships 3.12, and the stack says 3.13 to match local.
-add-apt-repository -y ppa:deadsnakes/ppa
-apt-get update -q
-apt-get install -y -q python3.13 python3.13-venv python3.13-dev
+# Python: Ubuntu 24.04's own 3.12. Django 5.2 supports it; a third-party PPA on
+# a box holding accreditation records is not worth a version bump that changes
+# nothing. Local development may run 3.13; the two are compatible for this app.
+apt-get install -y -q python3 python3-venv python3-dev
+
+# fail2ban: the sshd jail, on. Ubuntu's package ships it disabled by default
+# (no jail.d/defaults-debian.conf), so say so explicitly. Lightsail images
+# already have password authentication off for sshd.
+cat > /etc/fail2ban/jail.d/cme.conf <<'JAIL'
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+
+[sshd]
+enabled = true
+backend = systemd
+JAIL
+systemctl enable --now fail2ban
+systemctl restart fail2ban
 
 # Postgres 17 from PGDG, pinned to the major we run locally.
 if [[ ! -f /etc/apt/sources.list.d/pgdg.list ]]; then
@@ -129,14 +160,17 @@ SQL
 
 # --- 4. Directories -------------------------------------------------------------------
 say "Directories"
-install -d -o "$OWNER_USER" -g "$APP_USER" -m 0750 /srv/cme "$CHECKOUT"
+# The parent belongs to root and is traversable by everyone, so a second
+# tenant's users can reach their own directory; only the tenant directory is scoped.
+install -d -o root -g root -m 0755 /srv/cme
+install -d -o "$OWNER_USER" -g "$APP_USER" -m 0750 "$CHECKOUT"
 install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$CHECKOUT/uploads"
 install -d -o root -g root -m 0755 /etc/cme
 install -d -o root -g root -m 0750 "/var/backups/cme/${ORG}"
 install -d -m 0755 /run/cme
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  SECRET="$(python3.13 -c 'import secrets; print(secrets.token_urlsafe(64))')"
+  SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')"
   sed -e "s|__ORG__|${ORG}|g" -e "s|__HOSTNAME__|${HOSTNAME_FQDN}|g" -e "s|__SECRET__|${SECRET}|g" \
     "$HERE/env.template" > "$ENV_FILE"
   chown root:root "$ENV_FILE"
@@ -150,15 +184,19 @@ if [[ ! -f "$OWNER_SSH/id_ed25519" ]]; then
   install -d -o "$OWNER_USER" -g "$APP_USER" -m 0700 "$OWNER_SSH"
   sudo -u "$OWNER_USER" ssh-keygen -q -t ed25519 -N "" -C "cme-${ORG}-deploy" -f "$OWNER_SSH/id_ed25519"
   sudo -u "$OWNER_USER" ssh-keyscan -t ed25519 github.com >> "$OWNER_SSH/known_hosts" 2>/dev/null
-  say "Deploy key generated. Add this PUBLIC key to the GitHub repo as a read-only deploy key:"
+  say "Deploy key generated for ${OWNER_USER}. Add this PUBLIC key to the GitHub repo as a READ-ONLY deploy key:"
   cat "$OWNER_SSH/id_ed25519.pub"
+  echo
+  echo "Then rerun this same command. Any deploy key you added earlier for another user (e.g. ubuntu)"
+  echo "should be removed from GitHub once this one works: one key per purpose, and that purpose is this user."
 fi
 
 # The checkout itself, if not there yet.
 if [[ ! -d "$CHECKOUT/.git" ]]; then
-  say "Cloning (this fails until the deploy key above is on the repo; rerun then)"
-  sudo -u "$OWNER_USER" git clone "$GIT_URL" "$CHECKOUT" || {
-    echo "Clone failed. Add the deploy key on GitHub, then rerun this script." >&2
+  say "Cloning as ${OWNER_USER} (expected to fail on the first run, until the key above is on GitHub)"
+  sudo -u "$OWNER_USER" GIT_SSH_COMMAND="ssh -i $OWNER_SSH/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=$OWNER_SSH/known_hosts" \
+    git clone "$GIT_URL" "$CHECKOUT" || {
+    echo "Clone failed. Add the deploy key printed above on GitHub (read-only), then rerun this script." >&2
     exit 1
   }
 fi
@@ -179,11 +217,12 @@ systemctl start "cme-backup@${ORG}.timer"
 say "Caddy"
 install -d /etc/caddy/sites
 if ! grep -q 'import /etc/caddy/sites/\*.caddy' /etc/caddy/Caddyfile 2>/dev/null; then
-  cat > /etc/caddy/Caddyfile <<'CADDY'
+  cat > /etc/caddy/Caddyfile <<CADDY
 # One site file per tenant in /etc/caddy/sites/. Certificates are automatic
-# once the hostname resolves to this box.
+# once the hostname resolves to this box. The email is where Let's Encrypt
+# sends expiry warnings; written by server-setup.sh from its 4th argument.
 {
-	email ops@mri3.ca
+	email ${ACME_EMAIL}
 }
 import /etc/caddy/sites/*.caddy
 CADDY
@@ -196,7 +235,9 @@ systemctl reload caddy
 
 say "Done. Next:"
 cat <<NEXT
-  1. If the clone step failed: add the deploy key on GitHub, rerun this script.
+  1. If the clone step failed: add the deploy key on GitHub (read-only), rerun this script,
+     then remove any earlier deploy key for another user from GitHub and delete the
+     temporary clone you ran this from.
   2. Point DNS: A record  ${HOSTNAME_FQDN}  ->  this instance's static IP.
   3. Deploy:  sudo ${CHECKOUT}/deploy/deploy.sh ${ORG}
   4. Create the first staff login:
