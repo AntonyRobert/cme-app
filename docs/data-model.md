@@ -69,6 +69,8 @@ it.
 | id | UUID pk | Never exposed in a URL you don't authorize |
 | given_name, family_name | text | As typed. Never title-cased or "cleaned" |
 | credential | text | MD, RN, PharmD, PhD. Prints on the certificate |
+| affiliation | text, optional | e.g. a university department. Appears on the flyer and certificates, exactly as typed |
+| employer | text, optional | e.g. a hospital. Appears on the flyer and certificates, exactly as typed |
 | role | enum | physician, nurse, pharmacist, trainee, student, other |
 | licence_number | text, nullable | **As entered.** This is what prints |
 | licence_number_normalized | text, nullable | Derived on save: strip spaces, strip leading zeros, uppercase. Used only for matching |
@@ -85,6 +87,11 @@ what triggers the merge offer.
 
 Two check constraints: a licence number needs its jurisdiction, and a person cannot be
 merged into themselves.
+
+`affiliation` and `employer` are free text on the person, not a lookup table of
+institutions and not part of the session blurb: a presenter returns across events, and the
+blurb is per session. Someone with several writes them however they like, and they are
+rendered as typed.
 
 `role` decides which certificate template renders. Physicians get a CME credit
 certificate, everyone else gets an attendance certificate, **trainees included** (pending

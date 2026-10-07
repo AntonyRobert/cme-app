@@ -71,7 +71,10 @@ class Command(BaseCommand):
 
     # --- Helpers -------------------------------------------------------------
 
-    def person(self, given, family, role, email, credential="", licence=None, jurisdiction=None):
+    def person(
+        self, given, family, role, email, credential="", licence=None, jurisdiction=None,
+        affiliation="", employer="",
+    ):
         person = Person.objects.create(
             given_name=given,
             family_name=family,
@@ -79,6 +82,8 @@ class Command(BaseCommand):
             credential=credential,
             licence_number=licence,
             licence_jurisdiction=jurisdiction,
+            affiliation=affiliation,
+            employer=employer,
         )
         if email:
             PersonEmail.objects.create(person=person, email=email, is_primary=True)
@@ -208,14 +213,21 @@ class Command(BaseCommand):
         cote = p("Jean-François", "Côté", Role.PHYSICIAN, "jf.cote@example.org", "MD", "23456", "CMQ")
         # Same number as Côté in another jurisdiction: allowed.
         haddad = p("Amira", "Haddad", Role.PHYSICIAN, "amira.haddad@example.org", "MD", "23456", "CPSO")
-        gagnon = p("Marc", "Gagnon", Role.PHYSICIAN, "marc.gagnon@example.org", "MD", "34567", "CMQ")
+        gagnon = p(
+            "Marc", "Gagnon", Role.PHYSICIAN, "marc.gagnon@example.org", "MD", "34567", "CMQ",
+            affiliation="Department of Medicine, Example University",
+            employer="Example General Hospital",
+        )
         morin = p("Olivier", "Morin", Role.PHYSICIAN, "olivier.morin@example.org", "MD", "45 678", "CMQ")
         nguyen = p("Sophie", "Nguyen", Role.NURSE, "sophie.nguyen@example.org", "RN", "987654", "OIIQ")
         lavoie = p("Chantal", "Lavoie", Role.NURSE, "chantal.lavoie@example.org", "RN")
         okafor = p("David", "Okafor", Role.PHARMACIST, "david.okafor@example.org", "PharmD", "4521", "OPQ")
         bouchard = p("Léa", "Bouchard", Role.TRAINEE, "lea.bouchard@example.org", "MD")
         roy = p("Samuel", "Roy", Role.STUDENT, "samuel.roy@example.org")
-        sharma = p("Priya", "Sharma", Role.OTHER, "priya.sharma@example.org", "PhD")
+        sharma = p(
+            "Priya", "Sharma", Role.OTHER, "priya.sharma@example.org", "PhD",
+            affiliation="School of Information Studies, Example University; Example Health Informatics Lab",
+        )
         # The same Marie Tremblay, created again under her hospital address.
         # Filter People by "Possible duplicates" and merge the two.
         tremblay_dup = p("Marie", "Tremblay", Role.PHYSICIAN, "m.tremblay@example.com", "MD")

@@ -40,6 +40,20 @@ class Person(UUIDModel):
         max_length=50, blank=True, help_text="MD, RN, PharmD, PhD. Prints on the certificate."
     )
     role = models.CharField(max_length=20, choices=Role.choices)
+    # Free text, rendered exactly as typed. Not a lookup: institutions are
+    # named however the person names them, several at once if they like.
+    affiliation = models.CharField(
+        max_length=300,
+        blank=True,
+        help_text="Appears on the flyer and on certificates, exactly as typed. "
+        "For example a university department. More than one is fine.",
+    )
+    employer = models.CharField(
+        max_length=300,
+        blank=True,
+        help_text="Appears on the flyer and on certificates, exactly as typed. "
+        "For example a hospital or clinic. More than one is fine.",
+    )
 
     licence_number = models.CharField(
         max_length=50,

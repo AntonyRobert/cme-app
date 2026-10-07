@@ -79,6 +79,8 @@ class PersonAdmin(NoDeleteMixin, BaseAdmin):
     search_fields = [
         "given_name",
         "family_name",
+        "affiliation",
+        "employer",
         "emails__email",
         "licence_number",
         "licence_number_normalized",
@@ -96,7 +98,19 @@ class PersonAdmin(NoDeleteMixin, BaseAdmin):
         "updated_at",
     ]
     fieldsets = [
-        (None, {"fields": ["given_name", "family_name", "credential", "role"]}),
+        (
+            None,
+            {
+                "fields": [
+                    "given_name",
+                    "family_name",
+                    "credential",
+                    "role",
+                    "affiliation",
+                    "employer",
+                ]
+            },
+        ),
         (
             "Licence",
             {
