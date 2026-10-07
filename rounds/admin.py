@@ -260,12 +260,21 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
         return format_html('<a href="{}">{}</a>', url, label) if done < len(rows) else label
 
     def signoff_view(self, request, pk):
-        from attendance.signoff import confirm_event, confirm_person, review, unmatched_sessions
+        from attendance.signoff import (
+            can_sign_off,
+            confirm_event,
+            confirm_person,
+            review,
+            unmatched_sessions,
+        )
         from people.models import Person
 
         event = self._writable_event(request, pk)
+        signer = can_sign_off(request.user, event.program)
 
         if request.method == "POST":
+            if not signer:
+                raise PermissionDenied
             action = request.POST.get("action")
             if action == "confirm_event":
                 result = confirm_event(event, user=request.user, request=request)
@@ -318,6 +327,7 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
             "queue_url": changelist_url(AttendanceRecord, event__id__exact=event.pk, matched="no"),
             "bulk_ready": sum(1 for pr in reviews for s in pr.sessions if s.can_bulk_confirm),
             "held_people": [pr for pr in reviews if pr.held],
+            "signer": signer,
         }
         return TemplateResponse(request, "admin/rounds/roundsevent/signoff.html", context)
 

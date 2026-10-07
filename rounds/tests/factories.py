@@ -13,7 +13,12 @@ EVENT_START = datetime.datetime(2026, 9, 15, 16, 0, tzinfo=UTC)
 
 
 def at(minutes):
-    """A time `minutes` after the scheduled start of the default test event."""
+    """
+    A time `minutes` after the scheduled start of the default test event.
+    A datetime is passed through, so a factory can take either.
+    """
+    if isinstance(minutes, datetime.datetime):
+        return minutes
     return EVENT_START + datetime.timedelta(minutes=minutes)
 
 

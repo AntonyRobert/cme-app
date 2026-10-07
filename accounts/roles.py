@@ -16,8 +16,10 @@ to the programs they hold a role in. A user who is a coordinator in one
 program and read-only in another is in both groups and may write only in
 the first.
 
-Credit adjustments and certificate issue/revocation are the fraud surface.
-They are listed explicitly under Program admin and nowhere else.
+Credit adjustments, attendance sign-off and certificate issue/revocation
+are the fraud surface. They are listed explicitly under Program admin and
+nowhere else. Coordinators prepare the sign-off review and work the match
+queue; only a program admin writes a decision.
 """
 from django.contrib.auth.models import Group, Permission
 
@@ -58,6 +60,7 @@ COORDINATOR_PERMISSIONS = [
 
 # Everything a coordinator does, plus the decisions that create or change credit.
 PROGRAM_ADMIN_ONLY_PERMISSIONS = [
+    "attendance.sign_off_attendance",
     "credits.add_creditadjustment",
     "credits.add_evaluationwindow",
     "certificates.issue_certificate",

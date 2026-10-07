@@ -37,3 +37,12 @@ def give_role(user, program, role=ProgramRole.Role.COORDINATOR):
         user=user, program=program, defaults={"role": role}
     )
     return link
+
+
+def make_signer(program=None, username=None):
+    """A program admin of `program` (default: the shared program): someone who may sign off."""
+    from people.tests.factories import make_staff
+
+    user = make_staff(username)
+    give_role(user, program or make_program(), ProgramRole.Role.PROGRAM_ADMIN)
+    return user

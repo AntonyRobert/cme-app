@@ -9,11 +9,12 @@ the rows a human should look at.
 """
 from dataclasses import dataclass, field
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Q
 
 from audit.log import record
+from core.authz import is_admin_of
 from people.identity import resolve_root
 from people.models import Person
 
@@ -26,6 +27,25 @@ HELD_DISAGREE = "sources disagree"
 HELD_TICK_ONLY = "only a tick or a scan says they were there"
 HELD_UNMATCHED = "the session has unmatched rows"
 HELD_PRESENTER = "they presented this session"
+
+
+def can_sign_off(user, program):
+    """
+    Sign-off is the gate between recorded attendance and credit, so it is
+    program-admin work: the sign_off_attendance permission (which only the
+    Program admin group carries) and the program-admin role in that program.
+    Superusers pass, as everywhere.
+    """
+    if user is None or not user.is_active:
+        return False
+    if user.is_superuser:
+        return True
+    return user.has_perm("attendance.sign_off_attendance") and is_admin_of(user, program)
+
+
+def _require_signer(user, event):
+    if not can_sign_off(user, event.program):
+        raise PermissionDenied(f"{user} may not sign off attendance for {event.program}.")
 
 
 def unmatched_sessions(event):
@@ -201,6 +221,7 @@ def confirm_event(event, *, user, request=None):
     Per session, not per person: a person with one agreeing and one
     disagreeing session gets the agreeing one confirmed and the other held.
     """
+    _require_signer(user, event)
     result = ConfirmResult()
     for person_review in review(event):
         for session_review in person_review.sessions:
@@ -248,6 +269,7 @@ def confirm_person(event, person, choices, *, user, comment="", request=None):
     or to None to leave that session alone. Sessions with unmatched rows
     are refused; a figure that differs from the proposal needs a comment.
     """
+    _require_signer(user, event)
     person = resolve_root(person)
     by_session = {str(r.session.pk): r for pr in review(event) if pr.person == person for r in pr.sessions}
     if not by_session:

@@ -448,6 +448,10 @@ class SessionAttendanceDecision(AppendOnlyMixin, UUIDModel):
     class Meta:
         ordering = ["session", "person", "-confirmed_at"]
         indexes = [models.Index(fields=["session", "person"])]
+        permissions = [
+            # The gate between recorded attendance and credit: program admins only.
+            ("sign_off_attendance", "Can sign off attendance"),
+        ]
         constraints = [
             models.CheckConstraint(
                 condition=Q(confirmed_minutes=F("proposed_minutes")) | ~Q(comment=""),

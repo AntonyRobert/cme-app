@@ -94,6 +94,7 @@ class PersonAdmin(NoDeleteMixin, BaseAdmin):
         "merged_from_links",
         "linked_rows",
         "credit_standing",
+        "certificate_blockers",
         "created_at",
         "updated_at",
     ]
@@ -135,7 +136,7 @@ class PersonAdmin(NoDeleteMixin, BaseAdmin):
         (
             "Credit, earned versus certified",
             {
-                "fields": ["credit_standing"],
+                "fields": ["certificate_blockers", "credit_standing"],
                 "description": "Earned is computed now from attendance and evaluations. "
                 "Certified is what is printed on their valid certificates. A late "
                 "evaluation makes the two differ; the answer is a reissue, on request.",
@@ -203,6 +204,48 @@ class PersonAdmin(NoDeleteMixin, BaseAdmin):
             else:
                 parts.append(format_html("{} {}", count, label))
         return format_html_join(", ", "{}", ((part,) for part in parts))
+
+    @admin.display(description="Blocking a certificate")
+    def certificate_blockers(self, obj):
+        """
+        Every event in the current accreditation year whose attendance for
+        this person is not signed off, per program, linked to its sign-off
+        page. A forgotten event in March is what blocks December's certificate.
+        """
+        if not obj.pk:
+            return "-"
+        from certificates.figures import certificate_blockers
+        from credits.reports import person_standing_by_program
+
+        parts = []
+        for standing in person_standing_by_program(obj):
+            program = standing.program
+            start, end = program.accreditation_period(timezone.now().date())
+            blockers = certificate_blockers(obj, program, start, end)
+            if not blockers:
+                parts.append(format_html("<p>{}: nothing. A certificate can be issued.</p>", program))
+                continue
+            items = format_html_join(
+                "",
+                '<li><a href="{}">{} {}</a>: {} awaiting sign-off</li>',
+                (
+                    (
+                        b.signoff_url,
+                        b.event.date.isoformat(),
+                        b.event.title,
+                        ", ".join(s.title for s in b.sessions),
+                    )
+                    for b in blockers
+                ),
+            )
+            parts.append(
+                format_html(
+                    "<p><strong>{}</strong>: {} event(s) must be signed off first "
+                    "({} to {}).</p><ul>{}</ul>",
+                    program, len(blockers), start, end, items,
+                )
+            )
+        return format_html_join("", "{}", ((p,) for p in parts)) or "No programs yet."
 
     @admin.display(description="By event")
     def credit_standing(self, obj):

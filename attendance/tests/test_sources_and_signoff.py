@@ -26,6 +26,7 @@ from core.models import ImmutableRowError
 from credits.rules import REVIEW_SOURCES_DISAGREE, REVIEW_TICK_ONLY, credit_breakdown
 from credits.tests.factories import evaluate
 from people.tests.factories import make_person, make_staff
+from programs.tests.factories import give_role, make_program, make_signer
 from rounds.models import SessionPresenter
 from rounds.tests.factories import make_event, make_session
 
@@ -51,7 +52,7 @@ def person():
 
 @pytest.fixture
 def staff():
-    return make_staff("signer")
+    return make_signer(username="signer")
 
 
 def talks(event):
@@ -281,7 +282,7 @@ def test_a_correction_supersedes_and_needs_its_own_signoff(event, person, staff)
     teams_row(event, person, 0, 60)
     [original] = confirm_person(event, person, {first.pk: 60}, user=staff)
     [correction] = confirm_person(
-        event, person, {first.pk: 40}, user=make_staff("second-signer"), comment="Left at 12:40 per the chair"
+        event, person, {first.pk: 40}, user=make_signer(username="second-signer"), comment="Left at 12:40 per the chair"
     )
     original.refresh_from_db()
     assert correction.supersedes == original and not original.is_current
@@ -345,3 +346,51 @@ def test_unconfirmed_sessions_lists_what_is_waiting(event, person, staff):
     assert unconfirmed_sessions(person, event) == [first, second]
     confirm_person(event, person, {first.pk: 60}, user=staff)
     assert unconfirmed_sessions(person, event) == [second]
+
+
+# --- Who may sign off ------------------------------------------------------------
+
+
+def test_sign_off_is_program_admin_work_and_program_scoped(event, person):
+    """
+    Sign-off decides the numbers certificates are built from, so it needs
+    the sign_off_attendance permission (Program admin group only) AND the
+    program-admin role in that event's program. A program admin elsewhere,
+    even one who is a coordinator here, may not sign here.
+    """
+    from django.core.exceptions import PermissionDenied
+
+    first, _, _ = talks(event)
+    teams_row(event, person, 0, 60)
+    here, elsewhere = event.program, make_program("Elsewhere")
+
+    coordinator = make_staff("coordinator")
+    give_role(coordinator, here, "coordinator")
+    admin_elsewhere = make_signer(elsewhere, username="admin-elsewhere")
+    give_role(admin_elsewhere, here, "coordinator")
+    reader = make_staff("reader")
+    give_role(reader, here, "read_only")
+
+    for user in (coordinator, admin_elsewhere, reader, make_staff("nobody")):
+        with pytest.raises(PermissionDenied):
+            confirm_event(event, user=user)
+        with pytest.raises(PermissionDenied):
+            confirm_person(event, person, {first.pk: 60}, user=user)
+    assert SessionAttendanceDecision.objects.count() == 0
+
+    signer = make_signer(here, username="admin-here")
+    assert len(confirm_event(event, user=signer).confirmed) == 1
+    assert not admin_elsewhere.has_perm("attendance.sign_off_attendance") is False  # has the perm...
+    from attendance.signoff import can_sign_off
+
+    assert can_sign_off(admin_elsewhere, elsewhere) and not can_sign_off(admin_elsewhere, here)
+    assert not can_sign_off(coordinator, here)
+
+
+def test_the_permission_belongs_to_the_program_admin_group_only():
+    from accounts.roles import COORDINATOR, PROGRAM_ADMIN, READ_ONLY, role_permissions
+
+    perms = role_permissions()
+    assert "attendance.sign_off_attendance" in perms[PROGRAM_ADMIN]
+    assert "attendance.sign_off_attendance" not in perms[COORDINATOR]
+    assert "attendance.sign_off_attendance" not in perms[READ_ONLY]

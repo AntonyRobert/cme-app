@@ -18,16 +18,55 @@ from credits.rules import credit_breakdown
 from .rules import certificate_total
 
 
+@dataclass(frozen=True)
+class Blocker:
+    """One event whose attendance must be signed off before a certificate can print."""
+
+    event: object
+    sessions: list  # the sessions awaiting a decision
+
+    @property
+    def signoff_url(self):
+        from django.urls import reverse
+
+        return reverse("admin:rounds_roundsevent_signoff", args=[self.event.pk])
+
+    def __str__(self):
+        titles = ", ".join(s.title for s in self.sessions)
+        return f"{self.event.date:%Y-%m-%d} {self.event.title} ({titles})"
+
+
 class NotSignedOff(Exception):
     """A certificate cannot be issued while attendance in the period is unconfirmed."""
 
-    def __init__(self, person, event, sessions):
-        self.person, self.event, self.sessions = person, event, sessions
-        titles = ", ".join(s.title for s in sessions)
+    def __init__(self, person, blockers):
+        self.person, self.blockers = person, list(blockers)
+        listed = "; ".join(str(b) for b in self.blockers)
         super().__init__(
-            f"{person} has attendance at {event} not yet signed off ({titles}). "
-            "Confirm it before issuing."
+            f"{person} has attendance not yet signed off at {len(self.blockers)} event(s): "
+            f"{listed}. Sign them off before issuing."
         )
+
+    @property
+    def event(self):
+        return self.blockers[0].event
+
+
+def certificate_blockers(person, program, period_start, period_end):
+    """
+    [Blocker] for the events in the period whose attendance for this person
+    is not signed off, by date. Empty means a certificate can be issued. A
+    forgotten event in March blocks December's certificate, so the list
+    names every one, not the first.
+    """
+    blockers = []
+    for event in person_events(person).filter(
+        program=program, date__gte=period_start, date__lte=period_end
+    ):
+        b = credit_breakdown(person, event)
+        if b.blocking_certificate:
+            blockers.append(Blocker(event=event, sessions=b.blocking_certificate))
+    return blockers
 
 
 @dataclass(frozen=True)
@@ -76,6 +115,9 @@ def certificate_figures(person, program, period_start, period_end):
     print. One certificate per program: events of other programs are not
     on it.
     """
+    blockers = certificate_blockers(person, program, period_start, period_end)
+    if blockers:
+        raise NotSignedOff(person, blockers)
     lines = []
     for event in person_events(person).filter(
         program=program, date__gte=period_start, date__lte=period_end
@@ -83,8 +125,6 @@ def certificate_figures(person, program, period_start, period_end):
         b = credit_breakdown(person, event)
         if not (b.attendance_confirmed_credits or b.teaching_credits):
             continue
-        if not b.fully_confirmed:
-            raise NotSignedOff(person, event, b.awaiting_signoff)
         lines.append(
             LineFigures(
                 event=event,

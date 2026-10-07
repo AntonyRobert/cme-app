@@ -100,8 +100,8 @@ Random codes, not sequential. Unambiguous alphabet. Rate limit the verify endpoi
 ### Audit
 
 Append-only `AuditLog`. Actor, action, object, IP, timestamp. Log what would be disputed,
-not page views. Manual attendance rows and credit adjustments are the fraud surface, so
-they are the rows that matter most.
+not page views. Manual attendance rows, attendance sign-off and credit adjustments are the
+fraud surface, so they are the rows that matter most.
 
 ### Backups
 

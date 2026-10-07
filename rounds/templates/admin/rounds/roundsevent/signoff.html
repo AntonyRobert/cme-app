@@ -24,6 +24,7 @@ attendees; presenters' own talks are teaching and are not signed off here.</p>
 </p>
 {% endif %}
 
+{% if signer %}
 <form method="post">
   {% csrf_token %}
   <input type="hidden" name="action" value="confirm_event">
@@ -31,6 +32,11 @@ attendees; presenters' own talks are teaching and are not signed off here.</p>
     <input type="submit" class="default" value="Confirm this event: {{ bulk_ready }} session attendance(s) where the sources agree"{% if not bulk_ready %} disabled{% endif %}>
   </div>
 </form>
+{% else %}
+<p class="help"><strong>Review only.</strong> Signing off is a program admin's decision; {{ bulk_ready }}
+session attendance(s) are ready where the sources agree. Clear the match queue and look at
+the held rows below, then ask a program admin of {{ event.program }} to sign.</p>
+{% endif %}
 
 {% if held_people %}
 <h2>Held back for a look ({{ held_people|length }} people)</h2>
@@ -66,12 +72,12 @@ rows, or they presented it. Pick a figure per session and sign the person off.</
           {% for reason in s.held_reasons %}{% if not s.is_confirmed and not s.presented %}<br><strong>{{ reason }}</strong>{% endif %}{% endfor %}
         </td>
         <td>
-          {% if not s.presented and s.attendance.sources and not s.unmatched_rows %}
+          {% if signer and not s.presented and s.attendance.sources and not s.unmatched_rows %}
             <input type="checkbox" name="include_{{ s.session.pk }}" value="1"{% if not s.is_confirmed and not s.held_reasons %} checked{% endif %}>
           {% endif %}
         </td>
         <td>
-          {% if not s.presented and s.attendance.sources and not s.unmatched_rows %}
+          {% if signer and not s.presented and s.attendance.sources and not s.unmatched_rows %}
             <input type="number" name="minutes_{{ s.session.pk }}" min="0" max="{{ s.session.length_minutes }}" value="{{ s.proposed_minutes }}" style="width:5em">
           {% endif %}
         </td>
@@ -79,11 +85,13 @@ rows, or they presented it. Pick a figure per session and sign the person off.</
     {% endfor %}
     </tbody>
   </table>
+  {% if signer %}
   <p>
     <label for="comment-{{ pr.person.pk }}" style="display:inline">Comment (required when a figure differs from the proposal):</label>
     <input type="text" id="comment-{{ pr.person.pk }}" name="comment" style="width:30em">
     <input type="submit" value="Sign off {{ pr.person.given_name }}">
   </p>
+  {% endif %}
 </form>
 {% empty %}
 <p>No matched attendance rows yet.</p>

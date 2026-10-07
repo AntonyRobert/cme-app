@@ -667,10 +667,23 @@ proposed and confirmed credit; a certificate is issued from confirmed minutes on
 the issue action refuses while any event in the period has unconfirmed rows for the
 person.
 
-**Who signs off.** Anyone who can change the event: coordinators and program admins of
-its program. Read-only staff see the event but not the sign-off page. The decision records
+**Who signs off.** Program admins of the event's program, and nobody else. Sign-off is
+the gate between recorded attendance and credit, so it is on the fraud surface with
+credit adjustments and certificate issue: the explicit permission
+`attendance.sign_off_attendance` is carried by the Program admin group only, and the
+services (`confirm_event`, `confirm_person`) also require the program-admin role in that
+program (`can_sign_off`), so a program admin elsewhere who is a coordinator here cannot
+sign here. Coordinators prepare the review: upload, work the match queue, see the
+sign-off page with every held row and its reasons, but no buttons. The decision records
 `confirmed_by`, and the sitting is audit-logged (`attendance.event_confirmed`,
 `attendance.person_confirmed`).
+
+**What blocks a certificate is listed, not just refused.** `certificate_blockers(person,
+program, period)` names every event in the period with evaluated-but-unsigned minutes,
+by date, each linked to its sign-off page; `NotSignedOff` carries the same list. The
+person's admin page shows it per program for the current accreditation year, so a
+forgotten event in March is visible in December. Unevaluated minutes earn nothing and
+block nothing.
 
 ### Manual corrections and room attendance
 

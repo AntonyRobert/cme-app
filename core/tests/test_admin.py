@@ -1005,3 +1005,53 @@ def test_positions_number_themselves(client, boss, seeded):
     assert response.status_code == 302
     assert session.session_presenters.get(person=who("Gagnon")).position == 7
     assert session.objectives.get(text="Third objective").position == 3
+
+
+def test_a_coordinator_sees_the_review_but_only_a_program_admin_signs(client, seeded):
+    from attendance.models import SessionAttendanceDecision
+    from programs.tests.factories import give_role
+
+    event = fixture_event()
+    camille = Person.objects.create(given_name="Camille", family_name="Thibault")
+    PersonEmail.objects.create(person=camille, email="camille.thibault@mcgill.ca")
+    coordinator = get_user_model().objects.create_user(username="coord", password="x" * 20, is_staff=True)
+    give_role(coordinator, event.program, "coordinator")
+    client.force_login(coordinator)
+    import_fixture(client, event)  # coordinators upload
+    clear_queue(event, coordinator)  # and work the match queue
+
+    html = client.get(signoff_url(event)).content.decode()
+    assert "Review only" in html and "Thibault, Camille" in html
+    assert 'name="action" value="confirm_event"' not in html
+    assert "Sign off Camille" not in html
+    assert client.post(signoff_url(event), {"action": "confirm_event"}).status_code == 403
+    assert SessionAttendanceDecision.objects.count() == 0
+
+    give_role(coordinator, event.program, "program_admin")
+    html = client.get(signoff_url(event)).content.decode()
+    assert 'name="action" value="confirm_event"' in html
+    assert client.post(signoff_url(event), {"action": "confirm_event"}).status_code == 302
+    assert SessionAttendanceDecision.objects.count() > 0
+
+
+def test_person_page_lists_what_blocks_a_certificate_with_links(client, boss, seeded):
+    from attendance.signoff import confirm_event
+
+    event = fixture_event()
+    camille = Person.objects.create(given_name="Camille", family_name="Thibault")
+    PersonEmail.objects.create(person=camille, email="camille.thibault@mcgill.ca")
+    import_fixture(client, event)
+    clear_queue(event, boss)
+    from credits.tests.factories import evaluate
+
+    evaluate(camille, event.sessions.order_by("position").first())  # unevaluated minutes block nothing
+
+    page = client.get(url(Person, "change", camille.pk)).content.decode()
+    assert "Blocking a certificate" in page
+    assert "1 event(s) must be signed off first" in page
+    assert f'href="{signoff_url(event)}"' in page
+    assert "2026-09-10" in page
+
+    confirm_event(event, user=boss)
+    page = client.get(url(Person, "change", camille.pk)).content.decode()
+    assert "nothing. A certificate can be issued" in page

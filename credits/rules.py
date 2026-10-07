@@ -124,6 +124,15 @@ class SessionCredit:
         return not self.presented and self.minutes > 0 and self.confirmed_minutes is None
 
     @property
+    def blocks_certificate(self):
+        """
+        Awaiting sign-off AND evaluated: the minutes would carry credit, so a
+        certificate cannot print until someone signs them. Unevaluated minutes
+        earn nothing either way and block nothing.
+        """
+        return self.awaiting_signoff and self.evaluated
+
+    @property
     def teaching_minutes(self):
         """The whole session, for a session they presented. Not Teams minutes."""
         return self.session.length_minutes if self.presented else 0
@@ -165,6 +174,10 @@ class CreditBreakdown:
     @property
     def fully_confirmed(self):
         return not self.awaiting_signoff
+
+    @property
+    def blocking_certificate(self):
+        return [s.session for s in self.sessions if s.blocks_certificate]
 
     @property
     def teaching_credits(self):

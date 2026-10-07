@@ -259,6 +259,15 @@ Sign-off is per person with per-session checkboxes. Unmatched rows cannot be sig
 the match queue comes first. An attendee sees their hours as pending at once; nothing is
 certified until confirmed, so one busy fortnight does not stall everybody.
 
+**Sign-off is a program admin's decision, by explicit permission.**
+It decides the numbers certificates are built from, which is the fraud surface the
+security baseline names; credit adjustments and certificate issue are program-admin for
+the same reason. `attendance.sign_off_attendance` sits in the Program admin group only,
+and the program-admin role in that program is required too. Coordinators prepare the
+review and work the exceptions (the match queue, the held rows); program admins sign.
+The certificate side lists every unsigned event in the period with a link, so a forgotten
+event in March does not block December's certificate silently.
+
 **QR sign-in is one scan per session, credited as the whole session.**
 Not scan-in/scan-out: people forget to scan out, and orphan check-ins are a worse
 reconciliation problem than the one being solved; the sign-off step catches bad claims.

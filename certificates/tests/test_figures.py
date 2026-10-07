@@ -8,8 +8,8 @@ from attendance.tests.factories import teams_row
 from attendance.signoff import confirm_event
 from certificates.figures import CertificateFigures, LineFigures, NotSignedOff, certificate_figures
 from credits.tests.factories import evaluate
-from people.tests.factories import make_person, make_staff
-from programs.tests.factories import make_program
+from people.tests.factories import make_person
+from programs.tests.factories import make_program, make_signer
 from rounds.models import SessionPresenter
 from rounds.tests.factories import EVENT_START, make_event, make_session
 
@@ -41,7 +41,7 @@ def test_a_presenter_who_also_attends_gets_both_kinds_on_separate_lines():
     # Nothing prints until the attendance is signed off.
     with pytest.raises(NotSignedOff):
         certificate_figures(person, make_program(), *YEAR)
-    staff = make_staff()
+    staff = make_signer()
     confirm_event(first_event, user=staff)
     confirm_event(second_event, user=staff)
 
@@ -95,7 +95,7 @@ def test_a_line_prints_confirmed_minutes_not_proposed_ones():
     evaluate(person, a1)
     from attendance.signoff import confirm_person
 
-    confirm_person(event, person, {a1.pk: 45}, user=make_staff(), comment="Left early per chair")
+    confirm_person(event, person, {a1.pk: 45}, user=make_signer(), comment="Left early per chair")
     [line] = certificate_figures(person, make_program(), *YEAR).lines
     assert (line.attended_minutes, line.attendance_credits) == (45, D("0.75"))
 
@@ -106,3 +106,32 @@ def test_events_outside_the_period_are_left_off():
     SessionPresenter.objects.create(session=a1, person=person)
     assert len(certificate_figures(person, make_program(), *YEAR).lines) == 1
     assert certificate_figures(person, make_program(), datetime.date(2027, 1, 1), datetime.date(2027, 12, 31)).lines == []
+
+
+def test_blockers_name_every_unconfirmed_event_in_the_period_with_a_link():
+    """A forgotten event in March blocks December's certificate; the list says which."""
+    from certificates.figures import certificate_blockers
+
+    person = make_person()
+    program = make_program()
+    march = make_event(start=datetime.datetime(2026, 3, 5, 9, tzinfo=EVENT_START.tzinfo), sessions=0)
+    m1 = make_session(march, minutes=60)
+    june = make_event(start=datetime.datetime(2026, 6, 4, 9, tzinfo=EVENT_START.tzinfo), sessions=0)
+    j1 = make_session(june, minutes=60)
+    december = make_event(start=datetime.datetime(2026, 12, 3, 9, tzinfo=EVENT_START.tzinfo), sessions=0)
+    d1 = make_session(december, minutes=60)
+    for event in (march, june, december):
+        session = event.sessions.get()
+        teams_row(event, person, session.start_at, session.end_at)
+        evaluate(person, session)
+    confirm_event(june, user=make_signer())
+
+    blockers = certificate_blockers(person, program, *YEAR)
+
+    assert [(b.event, b.sessions) for b in blockers] == [(march, [m1]), (december, [d1])]
+    assert blockers[0].signoff_url.endswith(f"/{march.pk}/signoff/")
+    with pytest.raises(NotSignedOff) as caught:
+        certificate_figures(person, program, *YEAR)
+    assert [b.event for b in caught.value.blockers] == [march, december]
+    assert "2 event(s)" in str(caught.value)
+    assert certificate_blockers(person, program, datetime.date(2026, 6, 1), datetime.date(2026, 6, 30)) == []
