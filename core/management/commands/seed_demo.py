@@ -21,7 +21,7 @@ from django.utils import timezone
 from attendance.models import AttendanceRecord
 from attendance.services import log_manual_row, store_upload, supersede_rows
 from audit.log import record
-from credits.models import CreditAdjustment, EvaluationResponse, EvaluationSubmission
+from credits.models import CreditAdjustment, EvaluationSubmission
 from credits.windows import request_reopening
 from people.models import AllowedDomain, Person, PersonEmail
 from programs.models import Institution, Program
@@ -159,22 +159,25 @@ class Command(BaseCommand):
         return row
 
     def evaluate(self, person, session, minutes=20, complete=True, comment=None):
+        from credits.evaluation_forms import Kind, rendered_questions, resolve_form, store_answer
+
+        version = resolve_form(session).version
         submission = EvaluationSubmission.objects.create(
             person=person,
             session=session,
+            form_version=version,
             submitted_at=session.event.end_at + datetime.timedelta(hours=3),
             self_reported_session_minutes=minutes,
             attestation=True,
-            is_complete=complete,
         )
         if complete:
-            for objective in session.objectives.all():
-                EvaluationResponse.objects.create(
-                    submission=submission, objective=objective, question_key="objective_met", rating=4
-                )
-            EvaluationResponse.objects.create(
-                submission=submission, question_key="overall", rating=5, free_text=comment
-            )
+            for q in rendered_questions(version, session):
+                if q.kind == Kind.LIKERT_5:
+                    store_answer(submission, q, 4)
+                elif q.kind == Kind.YES_NO:
+                    store_answer(submission, q, 1)
+                elif q.key == "comments" and comment:
+                    store_answer(submission, q, comment)
         return submission
 
     def upload(self, event, label):
@@ -210,6 +213,11 @@ class Command(BaseCommand):
         )
         for name, slug in (("Internal Medicine", "im"), ("General Surgery", "gs")):
             Program.objects.get_or_create(institution=mcgill, slug=slug, defaults={"name": name})
+        from credits.evaluation_forms import create_standard_form
+
+        for program in Program.objects.all():
+            create_standard_form(program, user=self.staff)
+        self.program.refresh_from_db()  # now carries the default form
 
         AllowedDomain.objects.create(domain="mcgill.ca", note="University")
         AllowedDomain.objects.create(domain="muhc.mcgill.ca", note="MUHC")

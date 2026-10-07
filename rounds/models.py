@@ -95,6 +95,14 @@ class RoundsEvent(UUIDModel):
         "matched to this event on this title plus the date. Teams exports carry no meeting ID.",
     )
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
+    evaluation_form = models.ForeignKey(
+        "credits.EvaluationForm",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="+",
+        help_text="The evaluation form this event's sessions use. Blank means the program's default.",
+    )
     accredited_credits = models.DecimalField(
         max_digits=5,
         decimal_places=2,
@@ -327,6 +335,14 @@ class Session(UUIDModel):
         blank=True, help_text="Blank means right after the previous session, or the event's start."
     )
     end_at = models.DateTimeField(blank=True, help_text="Blank means one hour after the start.")
+    evaluation_form = models.ForeignKey(
+        "credits.EvaluationForm",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="+",
+        help_text="The evaluation form this talk uses. Blank means the event's, then the program's.",
+    )
     draft_blurb = models.TextField(blank=True)
     published_blurb = models.TextField(blank=True)
     submitted_at = models.DateTimeField(

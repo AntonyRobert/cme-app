@@ -451,9 +451,12 @@ def test_one_submission_per_person_per_session(event, person):
 
 def test_attestation_is_required(event, person):
     with pytest.raises(IntegrityError), transaction.atomic():
+        from .factories import form_for
+
         EvaluationSubmission.objects.create(
             person=person,
             session=sessions(event)[0],
+            form_version=form_for(sessions(event)[0]),
             self_reported_session_minutes=20,
             attestation=False,
         )
@@ -474,6 +477,7 @@ def test_one_answer_per_question_including_general_questions(event, person):
 
 def test_responses_are_reached_through_their_owner(event, person):
     submission = evaluate(person, sessions(event)[0])
+    before = EvaluationResponse.objects.for_person(person).count()  # the required answers
     EvaluationResponse.objects.create(submission=submission, question_key="overall", rating=5)
-    assert EvaluationResponse.objects.for_person(person).count() == 1
+    assert EvaluationResponse.objects.for_person(person).count() == before + 1
     assert EvaluationResponse.objects.for_person(make_person()).count() == 0

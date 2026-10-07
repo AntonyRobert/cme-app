@@ -6,7 +6,7 @@ register = template.Library()
 @register.filter
 def get_item(mapping, key):
     """{{ mapping|get_item:key }} for keys that are not plain strings (sessions, ids)."""
-    if mapping is None:
+    if not hasattr(mapping, "get"):  # None, or an undefined variable rendered as ""
         return None
     return mapping.get(key)
 

@@ -1,0 +1,25 @@
+{% load dicts %}
+{# One block per rendered question. Context: questions, answers (field_name -> value), errors (field_name -> text), readonly #}
+{% for q in questions %}
+<div class="question{% if q.field_name in errors %} error{% endif %}">
+  <p><strong>{{ forloop.counter }}. {{ q.prompt }}</strong>{% if q.required %} <span class="muted">(required)</span>{% endif %}</p>
+  {% if q.question.help_text %}<p class="muted">{{ q.question.help_text }}</p>{% endif %}
+  {% with current=answers|get_item:q.field_name %}
+  {% if q.kind == "likert_5" or q.kind == "yes_no" or q.kind == "single_choice" %}
+    {% for value, label in q.options %}
+      <label style="margin-right:1em"><input type="radio" name="{{ q.field_name }}" value="{{ value }}"{% if current|stringformat:"s" == value|stringformat:"s" %} checked{% endif %}{% if readonly %} disabled{% endif %}> {{ label }}</label>
+    {% endfor %}
+    {% if q.kind == "likert_5" %}<span class="muted">1 = strongly disagree, 5 = strongly agree</span>{% endif %}
+  {% elif q.kind == "multi_choice" %}
+    {% for value, label in q.options %}
+      <label style="margin-right:1em"><input type="checkbox" name="{{ q.field_name }}" value="{{ value }}"{% if value in current %} checked{% endif %}{% if readonly %} disabled{% endif %}> {{ label }}</label>
+    {% endfor %}
+  {% else %}
+    <textarea name="{{ q.field_name }}" rows="3" style="width:100%;max-width:40em"{% if readonly %} disabled{% endif %}>{{ current|default:"" }}</textarea>
+  {% endif %}
+  {% endwith %}
+  {% if q.field_name in errors %}<p class="error">{{ errors|get_item:q.field_name }}</p>{% endif %}
+</div>
+{% empty %}
+<p class="muted">This form has no questions.</p>
+{% endfor %}

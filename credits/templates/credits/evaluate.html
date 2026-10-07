@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% load dicts %}
+{% block title %}Evaluate: {{ session.title }}{% endblock %}
+{% block content %}
+<h1>{{ session.title }}</h1>
+<p class="muted">{{ session.event.program.name }}, {{ session.event.date|date:"j F Y" }}.
+{% if presenters %}Presented by {{ presenters }}.{% endif %}</p>
+
+{% if closed %}
+<p><strong>{{ closed }}</strong></p>
+<p><a href="{% url 'signin:me' %}">Back to my credits</a></p>
+{% else %}
+
+{% if submission and submission.is_complete %}
+<p><strong>Thank you: your evaluation is complete.</strong> It was submitted on
+{{ submission.submitted_at|date:"j M Y" }} and is shown below as it was asked.</p>
+{% elif submission %}
+<p>Your evaluation is saved but <strong>not yet complete</strong>: the required questions
+marked below still need an answer.</p>
+{% endif %}
+
+<form method="post">
+  {% csrf_token %}
+  {% if errors.form %}<p class="error">{{ errors.form }}</p>{% endif %}
+  {% include "credits/_questions.html" with readonly=submission.is_complete %}
+
+  <h2>Attendance</h2>
+  <p>
+    <label>How many minutes of this {{ session.length_minutes }}-minute session did you attend?
+      <input type="number" name="minutes" min="0" max="{{ session.length_minutes }}" value="{{ minutes|default:session.length_minutes }}"{% if submission.is_complete %} disabled{% endif %} style="width:5em"></label>
+    {% if errors.minutes %}<span class="error">{{ errors.minutes }}</span>{% endif %}
+  </p>
+  <p>
+    <label><input type="checkbox" name="attestation" value="1"{% if attested or submission.is_complete %} checked{% endif %}{% if submission.is_complete %} disabled{% endif %}>
+      I confirm these minutes are accurate.</label>
+    {% if errors.attestation %}<span class="error">{{ errors.attestation }}</span>{% endif %}
+  </p>
+  {% if not submission.is_complete %}
+  <p><button type="submit">Submit evaluation</button></p>
+  <p class="muted">Credit for attending this session is released once this evaluation is complete and
+  the program office has signed off the day's attendance.</p>
+  {% endif %}
+</form>
+<p><a href="{% url 'signin:me' %}">Back to my credits</a></p>
+{% endif %}
+{% endblock %}

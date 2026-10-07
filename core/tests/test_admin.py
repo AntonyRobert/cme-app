@@ -51,7 +51,7 @@ def who(family):
 
 def test_every_admin_page_renders(client, boss, seeded):
     models = [m for m in admin.site._registry if m._meta.app_label in OUR_APPS]
-    assert len(models) == 14
+    assert len(models) == 16  # the two evaluation form admins joined
     for model in models:
         model_admin = admin.site._registry[model]
         assert client.get(url(model, "changelist")).status_code == 200, model
@@ -695,7 +695,8 @@ def test_merge_with_a_collision_is_refused_and_shows_both_rows(client, boss, see
     main, duplicate = Person.objects.filter(family_name="Tremblay").order_by("created_at")
     theirs = EvaluationSubmission.objects.filter(person=main, session__event=seeded[1]).get()
     EvaluationSubmission.objects.create(
-        person=duplicate, session=theirs.session, self_reported_session_minutes=70, attestation=True
+        person=duplicate, session=theirs.session, form_version=theirs.form_version,
+        self_reported_session_minutes=70, attestation=True,
     )
     page = merge_post(client, [main, duplicate], confirm="1", survivor=str(main.pk))
     text = page.content.decode()
@@ -742,7 +743,6 @@ def test_an_evaluation_entered_by_staff_needs_an_open_window(client, boss, seede
         "submitted_at_1": "12:00:00",
         "self_reported_session_minutes": 57,
         "attestation": "on",
-        "is_complete": "on",
         "responses-TOTAL_FORMS": 0,
         "responses-INITIAL_FORMS": 0,
     }
@@ -753,8 +753,15 @@ def test_an_evaluation_entered_by_staff_needs_an_open_window(client, boss, seede
     client.post(url(EvaluationWindow, "add"), {"person": roy.pk, "session": session.pk, "reason": "x"})
     accepted = client.post(url(EvaluationSubmission, "add"), form)
     assert accepted.status_code == 302, accepted.context["adminform"].form.errors
+    submission = EvaluationSubmission.objects.get(person=roy, session=session)
+    assert submission.form_version == session.event.program.default_evaluation_form.current_version
     window = EvaluationWindow.objects.get(person=roy, session=session)
-    assert window.closed_at is not None  # a complete submission closes it
+    assert window.closed_at is None  # no answers yet: not complete, whatever staff tick
+    from credits.tests.factories import answer_all
+
+    answer_all(submission)  # the responses decide; a complete submission closes the window
+    window.refresh_from_db()
+    assert window.closed_at is not None
 
 
 def test_a_closed_event_cannot_be_reopened_from_the_admin(client, boss, seeded):

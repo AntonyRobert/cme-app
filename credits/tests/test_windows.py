@@ -92,8 +92,11 @@ def test_the_window_length_is_a_setting(session, person, settings):
 
 def test_the_model_refuses_a_submission_when_the_window_is_closed(session, person, clock):
     clock(local(2026, 10, 20))
+    from .factories import form_for
+
     submission = EvaluationSubmission(
-        person=person, session=session, self_reported_session_minutes=60, attestation=True
+        person=person, session=session, form_version=form_for(session),
+        self_reported_session_minutes=60, attestation=True,
     )
     with pytest.raises(ValidationError) as err:
         submission.full_clean()
@@ -140,9 +143,11 @@ def test_the_window_closes_when_a_complete_evaluation_is_submitted(session, pers
     evaluate(person, session, complete=False)  # a draft does not close it
     window.refresh_from_db()
     assert window.closed_at is None
+    from .factories import answer_all
+
     submission = EvaluationSubmission.objects.get(person=person, session=session)
-    submission.is_complete = True
-    submission.save()
+    answer_all(submission)  # the responses are the truth; the flag follows
+    assert submission.is_complete
     window.refresh_from_db()
     assert window.closed_at == local(2026, 10, 2)
     assert not submission_allowed(person, session, at=local(2026, 10, 3))

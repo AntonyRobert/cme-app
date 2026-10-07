@@ -1,0 +1,32 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls dicts %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+  &rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+  &rsaquo; <a href="{% url opts|admin_urlname:'change' form_obj.pk %}">{{ form_obj }}</a>
+  &rsaquo; Preview
+</div>
+{% endblock %}
+
+{% block content %}
+<p>This is what an attendee sees. Nothing here is saved. Pick a session so the per-objective
+questions expand against its learning objectives:</p>
+<form method="get">
+  <select name="session" onchange="this.form.submit()">
+    {% for s in sessions %}<option value="{{ s.pk }}"{% if s == session %} selected{% endif %}>{{ s.event.date }} #{{ s.position }} {{ s.title }} ({{ s.objectives.count }} objectives)</option>{% endfor %}
+  </select>
+  <noscript><button type="submit">Show</button></noscript>
+</form>
+
+{% if session %}
+<h2>{{ session.title }}</h2>
+<p class="help">{{ form_obj }} v{{ version.number }}. {{ questions|length }} question(s) once expanded.</p>
+<div style="max-width:48em">
+  {% include "credits/_questions.html" with readonly=True %}
+</div>
+{% else %}
+<p>This program has no sessions yet to preview against.</p>
+{% endif %}
+{% endblock %}

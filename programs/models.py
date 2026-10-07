@@ -105,6 +105,14 @@ class Program(UUIDModel):
         help_text="Attendance sources further apart than this, for one person and session, "
         "are held back from bulk sign-off for a human to look at.",
     )
+    default_evaluation_form = models.ForeignKey(
+        "credits.EvaluationForm",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="+",
+        help_text="The evaluation form a session uses unless its event or the session itself says otherwise.",
+    )
     retention_years = models.PositiveSmallIntegerField(
         default=7,
         help_text="How many years records are kept after the accreditation year. The value "

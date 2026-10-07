@@ -91,6 +91,7 @@ class ProgramAdmin(NoDeleteMixin, BaseAdmin):
                     "accreditation_year_end_day",
                     "coi_question_version",
                     "retention_years",
+                    "default_evaluation_form",
                 ]
             },
         ),

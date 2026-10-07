@@ -1,0 +1,24 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+  &rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+  &rsaquo; <a href="{% url opts|admin_urlname:'change' form_obj.pk %}">{{ form_obj }}</a>
+  &rsaquo; {{ title }}
+</div>
+{% endblock %}
+
+{% block content %}
+<p>{{ question }}</p>
+<form method="post">
+  {% csrf_token %}
+  <p><label for="id_{{ field }}">{{ field_label }}:</label>
+    <input type="text" id="id_{{ field }}" name="{{ field }}" value="{{ default|default:'' }}" maxlength="300" style="width:30em"></p>
+  <div class="submit-row">
+    <input type="submit" class="default" value="{{ action }}">
+    <a class="closelink" href="{% url opts|admin_urlname:'change' form_obj.pk %}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

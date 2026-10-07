@@ -15,7 +15,7 @@
       <td>{{ session.title }}</td>
       <td>
         {% if state == STATE_OPEN or state == STATE_REOPENED %}
-          <span class="muted">Form open{% if state == STATE_REOPENED %} (reopened){% endif %}; the form itself arrives in the next release.</span>
+          <a href="{% url 'credits:evaluate' session.pk %}">Evaluate this talk</a>{% if state == STATE_REOPENED %} <span class="muted">(reopened)</span>{% endif %}
         {% elif state == STATE_CAN_REQUEST %}
           <form method="post" action="{% url 'signin:reopen' %}">{% csrf_token %}
             <input type="hidden" name="session" value="{{ session.pk }}">

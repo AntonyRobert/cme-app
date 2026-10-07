@@ -131,7 +131,7 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
         (
             None,
             {
-                "fields": ["program", "title", "date", "status", "accredited_credits", "attendance_links"],
+                "fields": ["program", "title", "date", "status", "accredited_credits", "evaluation_form", "attendance_links"],
                 "description": "A blank title takes the program's series name; blank credits "
                 "take the program's default.",
             },
@@ -545,6 +545,7 @@ class SessionAdmin(ProgramScopedAdminMixin, BaseAdmin):
     list_select_related = ["event"]
     inlines = [SessionPresenterInline, LearningObjectiveInline]
     actions = ["attach_declarations"]
+    readonly_fields = ["resolved_evaluation_form"]
     fieldsets = [
         (
             None,
@@ -552,6 +553,13 @@ class SessionAdmin(ProgramScopedAdminMixin, BaseAdmin):
                 "fields": ["event", "position", "title", "start_at", "end_at", "submitted_at"],
                 "description": "Attended time is clamped to these times. Leave the end blank "
                 "for one hour after the start.",
+            },
+        ),
+        (
+            "Evaluation form",
+            {
+                "fields": ["evaluation_form", "resolved_evaluation_form"],
+                "description": "Leave blank to use the event's form, then the program's default.",
             },
         ),
         (
@@ -565,6 +573,31 @@ class SessionAdmin(ProgramScopedAdminMixin, BaseAdmin):
 
     def get_queryset(self, request):
         return super().get_queryset(request).prefetch_related("session_presenters__person")
+
+    @admin.display(description="Resolves to")
+    def resolved_evaluation_form(self, obj):
+        """Which form this session's evaluation uses, and where that comes from."""
+        if not obj.pk:
+            return "Save first."
+        from credits.evaluation_forms import resolve_form
+
+        r = resolve_form(obj)
+        parts = []
+        if r.form is None:
+            parts.append("<strong>No active form resolves: attendees cannot evaluate this session.</strong>")
+        else:
+            parts.append(
+                format_html(
+                    '<a href="{}">{}</a> v{} (set on the {})',
+                    reverse("admin:credits_evaluationform_change", args=[r.form.pk]),
+                    r.form,
+                    r.version.number,
+                    r.level,
+                )
+            )
+        for level, form in r.skipped:
+            parts.append(format_html("Skipped: {} on the {} is {}.", form, level, form.status))
+        return format_html_join(mark_safe("<br>"), "{}", ((mark_safe(p),) for p in parts))
 
     @admin.display(description="Time", ordering="start_at")
     def times(self, obj):
