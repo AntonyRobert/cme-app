@@ -67,8 +67,9 @@ Tests you asked for, by name: `test_a_break_between_sessions_does_not_count`,
 ### Decisions in the redesign that your review did not settle
 
 1. **The hundredths are cut once, on the event total.** Minutes are gathered per
-   session and divided by sixty once, so a certificate's total equals the sum of its
-   lines. Cut downward, so a printed figure never overstates.
+   session and divided by sixty once. Cut downward, so a figure never overstates. Any
+   coarser rounding happens only when the year-end certificate is generated, by a
+   function that does not exist yet; the step and direction are still yours to choose.
 2. **Hours-only manual rows now name a session** (`AttendanceRecord.session`, with a
    check constraint). Minutes without times had to belong somewhere to be credited per
    session. Timed rows leave it blank and are matched by their times. The migration

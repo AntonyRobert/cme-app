@@ -517,6 +517,11 @@ printed lines.
 `accredited_credits` stays a field rather than being computed from the sessions, so an
 accrediting body can approve fewer credits than the clock says.
 
+**Rounding happens at issue, not before.** Credit stays exact (to the hundredth) all
+year, in the admin and on the credits page. When the year-end certificate is generated,
+the total is rounded once, by one function in the issuing code. The rule (to what step,
+and which way) is still to be decided; see `decisions.md`.
+
 Credit is a moving target: a reopened evaluation can earn credit after a certificate was
 issued. That is not an error. The person's admin page shows earned against certified
 credit per event, and the answer is a reissue, on request.

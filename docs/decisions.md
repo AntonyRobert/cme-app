@@ -65,6 +65,12 @@ stricter candidate from the earlier open question is now buildable, because sess
 times, and this is it. `accredited_credits` stays a field so an accrediting body can
 approve fewer credits than the clock says.
 
+**Rounding happens once, when the year-end certificate is generated.**
+During the year credit is exact, minutes over sixty, everywhere it is shown. The
+certificate is the only place a rounded figure appears, produced by one function at
+issue time. Nothing stored before issue is rounded, so a late evaluation or a correction
+never has to undo a rounding.
+
 **Credit is hours attended: minutes divided by sixty, no quarter rounding.**
 59 minutes of a 60-minute talk is 59/60 of a credit, 0.98. Rounding to the nearest
 quarter was decided early and reversed: it produced a cliff where joining a minute late
@@ -205,6 +211,12 @@ recoverable; overstating isn't.
 When a fixed parser re-reads a stored export, the old rows may already carry matches,
 room-roster links and supersessions. Not designed yet. `parser_version` is recorded on
 uploads and rows so there is something to work with.
+
+**How the certificate total is rounded.**
+Decided that it happens at issue; not yet decided to what. The candidates are the nearest
+quarter or the nearest whole credit, rounded half up or down, and whether each event
+line is rounded or only the total (if only the total, the lines will not add up to it).
+Check what the accrediting body expects on the document before issuing the first one.
 
 **Series name.**
 `RoundsEvent.title` defaults to a `SERIES_NAME` setting. The value in settings is a
