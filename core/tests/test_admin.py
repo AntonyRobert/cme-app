@@ -641,3 +641,93 @@ def test_a_session_added_on_its_own_page_follows_the_previous_one(client, boss, 
     bonus = Session.objects.get(title="Bonus talk")
     assert timezone.localtime(bonus.start_at).strftime("%H:%M") == "15:00"
     assert timezone.localtime(bonus.end_at).strftime("%H:%M") == "16:00"
+
+
+def test_positions_number_themselves(client, boss, seeded):
+    """Sessions on an event, then presenters and objectives on a session: no numbers typed."""
+    response = client.post(
+        url(RoundsEvent, "add"),
+        {
+            "title": "Numbered for me",
+            "status": "draft",
+            "accredited_credits": "3.00",
+            "start_at_0": "2026-11-05",
+            "start_at_1": "12:00:00",
+            "sessions-TOTAL_FORMS": 3,
+            "sessions-INITIAL_FORMS": 0,
+            "sessions-0-title": "A",
+            "sessions-1-title": "B",
+            "sessions-2-title": "",  # left empty: ignored
+        },
+    )
+    assert response.status_code == 302, response.context["adminform"].form.errors
+    event = RoundsEvent.objects.get(title="Numbered for me")
+    assert [(s.position, s.title) for s in event.sessions.order_by("position")] == [(1, "A"), (2, "B")]
+
+    session = event.sessions.get(title="A")
+    haddad, sharma = who("Haddad"), who("Sharma")
+    response = client.post(
+        url(Session, "change", session.pk),
+        {
+            "event": event.pk,
+            "position": "",  # blank on the session itself keeps its number too
+            "title": "A",
+            "start_at_0": "2026-11-05", "start_at_1": "12:00:00",
+            "end_at_0": "2026-11-05", "end_at_1": "13:00:00",
+            "draft_blurb": "", "published_blurb": "",
+            "session_presenters-TOTAL_FORMS": 2,
+            "session_presenters-INITIAL_FORMS": 0,
+            "session_presenters-0-person": haddad.pk,
+            "session_presenters-1-person": sharma.pk,
+            "session_presenters-1-position": 5,  # a typed number is kept; blanks follow it
+            "objectives-TOTAL_FORMS": 3,
+            "objectives-INITIAL_FORMS": 0,
+            "objectives-0-text": "First objective",
+            "objectives-1-text": "Second objective",
+            "objectives-2-text": "",
+        },
+    )
+    assert response.status_code == 302, (
+        response.context["adminform"].form.errors,
+        [f.errors for fs in response.context["inline_admin_formsets"] for f in fs.formset.forms],
+    )
+    assert [(p.position, p.person) for p in session.session_presenters.order_by("position")] == [
+        (5, sharma),
+        (6, haddad),
+    ]
+    assert [(o.position, o.text) for o in session.objectives.order_by("position")] == [
+        (1, "First objective"),
+        (2, "Second objective"),
+    ]
+
+    # Adding one more of each later continues the numbering.
+    response = client.post(
+        url(Session, "change", session.pk),
+        {
+            "event": event.pk, "position": 1, "title": "A",
+            "start_at_0": "2026-11-05", "start_at_1": "12:00:00",
+            "end_at_0": "2026-11-05", "end_at_1": "13:00:00",
+            "draft_blurb": "", "published_blurb": "",
+            "session_presenters-TOTAL_FORMS": 3,
+            "session_presenters-INITIAL_FORMS": 2,
+            "session_presenters-0-id": session.session_presenters.get(person=haddad).pk,
+            "session_presenters-0-person": haddad.pk,
+            "session_presenters-0-position": 6,
+            "session_presenters-1-id": session.session_presenters.get(person=sharma).pk,
+            "session_presenters-1-person": sharma.pk,
+            "session_presenters-1-position": 5,
+            "session_presenters-2-person": who("Gagnon").pk,
+            "objectives-TOTAL_FORMS": 3,
+            "objectives-INITIAL_FORMS": 2,
+            "objectives-0-id": session.objectives.get(position=1).pk,
+            "objectives-0-position": 1,
+            "objectives-0-text": "First objective",
+            "objectives-1-id": session.objectives.get(position=2).pk,
+            "objectives-1-position": 2,
+            "objectives-1-text": "Second objective",
+            "objectives-2-text": "Third objective",
+        },
+    )
+    assert response.status_code == 302
+    assert session.session_presenters.get(person=who("Gagnon")).position == 7
+    assert session.objectives.get(text="Third objective").position == 3

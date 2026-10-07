@@ -9,6 +9,7 @@ from core.models import ImmutableRowError
 from people.tests.factories import make_person
 from rounds.models import (
     COIDeclaration,
+    LearningObjective,
     RoundsEvent,
     Session,
     SessionPresenter,
@@ -65,6 +66,20 @@ def test_a_session_with_no_start_follows_the_previous_one():
     second.save()
     assert (first.start_at, first.end_at) == (at(0), at(60))
     assert (second.start_at, second.end_at) == (at(60), at(120))
+
+
+def test_blank_positions_take_the_next_number():
+    event = make_event(minutes=180, sessions=0)
+    first = Session.objects.create(event=event, title="One")
+    second = Session.objects.create(event=event, title="Two")
+    assert (first.position, second.position) == (1, 2)
+    SessionPresenter.objects.create(session=first, person=make_person())
+    SessionPresenter.objects.create(session=first, person=make_person())
+    assert sorted(first.session_presenters.values_list("position", flat=True)) == [1, 2]
+    LearningObjective.objects.create(session=first, text="a")
+    LearningObjective.objects.create(session=first, position=7, text="b")
+    LearningObjective.objects.create(session=first, text="c")
+    assert list(first.objectives.values_list("position", flat=True)) == [1, 7, 8]
 
 
 def test_a_session_must_fall_inside_its_event():

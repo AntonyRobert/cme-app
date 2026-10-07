@@ -28,6 +28,12 @@ def default_event_title():
     return settings.SERIES_NAME
 
 
+def next_position(queryset):
+    """The number after the highest position already used among `queryset`."""
+    highest = queryset.aggregate(models.Max("position"))["position__max"]
+    return (highest or 0) + 1
+
+
 def end_of_academic_year(today=None):
     """The next 30 June, the default expiry of a conflict-of-interest declaration."""
     today = today or timezone.localdate()
@@ -172,7 +178,9 @@ class Session(UUIDModel):
     """
 
     event = models.ForeignKey(RoundsEvent, on_delete=models.PROTECT, related_name="sessions")
-    position = models.PositiveSmallIntegerField(help_text="1, 2, 3. Order on the flyer.")
+    position = models.PositiveSmallIntegerField(
+        blank=True, help_text="Order on the flyer. Blank takes the next number."
+    )
     title = models.CharField(max_length=300)
     presenters = models.ManyToManyField(
         Person, through="SessionPresenter", related_name="sessions_presented"
@@ -208,6 +216,10 @@ class Session(UUIDModel):
         return self.length_seconds // 60
 
     def _fill_defaults(self):
+        if self.position is None and self.event_id:
+            self.position = next_position(
+                Session.objects.filter(event_id=self.event_id).exclude(pk=self.pk)
+            )
         if self.start_at is None and self.event_id:
             previous = (
                 Session.objects.filter(event_id=self.event_id)
@@ -260,7 +272,9 @@ class SessionPresenter(UUIDModel):
         Session, on_delete=models.CASCADE, related_name="session_presenters"
     )
     person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="presentations")
-    position = models.PositiveSmallIntegerField(default=1, help_text="Order the names print.")
+    position = models.PositiveSmallIntegerField(
+        blank=True, help_text="Order the names print. Blank takes the next number."
+    )
     coi_declaration = models.ForeignKey(
         COIDeclaration,
         null=True,
@@ -294,8 +308,15 @@ class SessionPresenter(UUIDModel):
             )
         return self.coi_declaration
 
+    def _fill_position(self):
+        if self.position is None and self.session_id:
+            self.position = next_position(
+                SessionPresenter.objects.filter(session_id=self.session_id).exclude(pk=self.pk)
+            )
+
     def clean(self):
         super().clean()
+        self._fill_position()
         if (
             self.coi_declaration_id
             and self.person_id
@@ -306,6 +327,7 @@ class SessionPresenter(UUIDModel):
             )
 
     def save(self, *args, **kwargs):
+        self._fill_position()
         self.attach_current_declaration()
         super().save(*args, **kwargs)
 
@@ -314,7 +336,7 @@ class LearningObjective(UUIDModel):
     """One objective of a session. The evaluation form asks one question per row."""
 
     session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name="objectives")
-    position = models.PositiveSmallIntegerField()
+    position = models.PositiveSmallIntegerField(blank=True, help_text="Blank takes the next number.")
     text = models.TextField()
 
     class Meta:
@@ -327,3 +349,17 @@ class LearningObjective(UUIDModel):
 
     def __str__(self):
         return f"{self.position}. {self.text[:60]}"
+
+    def _fill_position(self):
+        if self.position is None and self.session_id:
+            self.position = next_position(
+                LearningObjective.objects.filter(session_id=self.session_id).exclude(pk=self.pk)
+            )
+
+    def clean(self):
+        super().clean()
+        self._fill_position()
+
+    def save(self, *args, **kwargs):
+        self._fill_position()
+        super().save(*args, **kwargs)

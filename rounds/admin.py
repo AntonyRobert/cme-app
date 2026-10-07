@@ -1,11 +1,18 @@
 from django.contrib import admin, messages
 from django.db.models import Count, Q
-from django.forms.models import BaseInlineFormSet
 from django.utils import timezone
 from django.utils.html import format_html, format_html_join
 
 from audit.log import record
-from core.admin import AppendOnlyAdmin, BaseAdmin, SafeModelForm, admin_link, changelist_url
+from core.admin import (
+    AppendOnlyAdmin,
+    AutoPositionFormSet,
+    BaseAdmin,
+    PositionedRowForm,
+    SafeModelForm,
+    admin_link,
+    changelist_url,
+)
 
 from .models import (
     DEFAULT_SESSION_LENGTH,
@@ -17,11 +24,11 @@ from .models import (
 )
 
 
-class SessionFormSet(BaseInlineFormSet):
+class SessionFormSet(AutoPositionFormSet):
     """
-    Fill in the times nobody wants to type. A row with a title but no
-    start begins when the previous row ends (or when the event starts),
-    and lasts an hour unless an end is given.
+    Fill in what nobody wants to type. A row with a title but no number is
+    the next session; with no start it begins when the previous row ends
+    (or when the event starts), and lasts an hour unless an end is given.
     """
 
     def clean(self):
@@ -43,33 +50,18 @@ class SessionFormSet(BaseInlineFormSet):
             cursor = data["end_at"]
 
 
-class SessionRowForm(SafeModelForm):
-    def has_changed(self):
-        # A new row with only its number filled in is an empty row.
-        if self.instance._state.adding and set(self.changed_data) <= {"position"}:
-            return False
-        return super().has_changed()
-
-
 class SessionInline(admin.TabularInline):
     model = Session
-    form = SessionRowForm
+    form = PositionedRowForm
     formset = SessionFormSet
     fields = ["position", "title", "start_at", "end_at"]
     show_change_link = True
     verbose_name_plural = (
-        "Sessions (type the titles; a blank start follows the previous session, "
-        "a blank end is an hour later)"
+        "Sessions (type the titles; the number, start and end fill themselves in)"
     )
 
     def get_extra(self, request, obj=None, **kwargs):
         return 0 if obj else 3
-
-    def get_formset_kwargs(self, request, obj, inline, prefix):
-        kwargs = super().get_formset_kwargs(request, obj, inline, prefix)
-        if obj is None:
-            kwargs["initial"] = [{"position": n} for n in (1, 2, 3)]
-        return kwargs
 
 
 @admin.register(RoundsEvent)
@@ -188,7 +180,8 @@ class RoundsEventAdmin(BaseAdmin):
 
 class SessionPresenterInline(admin.TabularInline):
     model = SessionPresenter
-    form = SafeModelForm
+    form = PositionedRowForm
+    formset = AutoPositionFormSet
     extra = 0
     fields = ["position", "person", "coi_declaration", "coi_status"]
     readonly_fields = ["coi_status"]
@@ -210,7 +203,8 @@ class SessionPresenterInline(admin.TabularInline):
 
 class LearningObjectiveInline(admin.TabularInline):
     model = LearningObjective
-    form = SafeModelForm
+    form = PositionedRowForm
+    formset = AutoPositionFormSet
     extra = 0
     fields = ["position", "text"]
 

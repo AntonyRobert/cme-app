@@ -22,6 +22,44 @@ class SafeModelForm(forms.ModelForm):
         super()._update_errors(errors)
 
 
+class PositionedRowForm(SafeModelForm):
+    """An inline row whose only entry is its number is an empty row."""
+
+    def has_changed(self):
+        if self.instance._state.adding and set(self.changed_data) <= {"position"}:
+            return False
+        return super().has_changed()
+
+
+class AutoPositionFormSet(forms.models.BaseInlineFormSet):
+    """
+    Inline rows with a `position` field: a new row left blank takes the next
+    number after everything already saved and everything numbered above it,
+    in the order the rows appear. Typed numbers are kept.
+    """
+
+    position_field = "position"
+
+    def clean(self):
+        name = self.position_field
+        taken = set()
+        if self.instance.pk:
+            taken.update(
+                self.queryset.exclude(pk__in=[f.instance.pk for f in self.initial_forms])
+                .values_list(name, flat=True)
+            )
+        live = [f for f in self.forms if f.has_changed() or f.instance.pk]
+        live = [f for f in live if not self._should_delete_form(f) and hasattr(f, "cleaned_data")]
+        taken.update(f.cleaned_data.get(name) for f in live if f.cleaned_data.get(name))
+        for form in live:
+            if not form.cleaned_data.get(name):
+                number = max(taken, default=0) + 1
+                form.cleaned_data[name] = number
+                setattr(form.instance, name, number)
+                taken.add(number)
+        super().clean()
+
+
 class BaseAdmin(admin.ModelAdmin):
     form = SafeModelForm
     # A URL typed without a scheme is taken as https (Django 6's default).
