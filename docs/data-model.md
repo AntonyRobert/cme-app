@@ -172,21 +172,19 @@ flyer renders an event, the evaluation form targets a session.
 | id | UUID pk | |
 | title | text | Defaults to the `SERIES_NAME` setting. Prints on certificate lines |
 | date | date | |
-| start_at, end_at | timestamptz | Scheduled |
-| actual_start_at, actual_end_at | timestamptz, nullable | Null means "as scheduled" |
+| start_at, end_at | timestamptz | The outer bounds. Every session falls inside them |
 | teams_join_url | text | The link pasted in the invite |
 | teams_meeting_id | text, nullable | Lets an upload match an event automatically |
 | status | enum | draft, published, held, closed |
 | accredited_credits | decimal | Credits available for the whole event. Must be a multiple of 0.25 |
 
 The flyer page shows published events, the evaluation form opens on held, and closed stops
-further submissions so December totals stop moving.
+further submissions so December totals stop moving. **Closed is final.** A closed event
+cannot go back to any other status: its totals are frozen, and reopening would silently
+move them.
 
-**The credit window** is `effective_start - 5 minutes` to `effective_end`, where
-`effective_*` is `actual_*` if set, otherwise the scheduled time. When rounds runs twenty
-minutes over, set `actual_end_at` once and everyone's credit recomputes. The actual times
-are nullable rather than copied from the schedule, so rescheduling a draft event can't
-leave stale actual times behind.
+Attended time is measured against the sessions' own times (below), not the event's. When
+a talk runs over, change that session's `end_at` once and everyone's credit follows.
 
 ### Session
 
@@ -196,11 +194,16 @@ leave stale actual times behind.
 | event | FK RoundsEvent | |
 | position | smallint | 1, 2, 3. Order on the flyer |
 | title | text | |
-| duration_minutes | smallint | |
+| start_at, end_at | timestamptz | Entered by the presenter. `end_at` defaults to an hour after the start |
 | draft_blurb, published_blurb | text | The draft/published split |
 | submitted_at | timestamptz, nullable | Null means the presenters haven't filled it yet |
 
-Unique on `(event, position)`.
+Unique on `(event, position)`. A session must fall inside its event and must not overlap
+another session of the same event; sessions are ordered by `start_at`. A typical event is
+three one-hour sessions.
+
+The session's times are what attendance is clamped to and what credit is earned against.
+A break between two talks is not educational activity.
 
 `submitted_at` drives the reminder job. Everything unfilled three days out is the chase
 list.
@@ -287,6 +290,7 @@ the old rows, and the matches pointing at them, on a re-parse is **not yet desig
 | upload | FK AttendanceUpload, nullable | Null for anything entered by hand |
 | parser_version | text, nullable | Null for anything entered by hand |
 | event | FK RoundsEvent | Denormalized for query speed |
+| session | FK Session, nullable | Hours-only rows only: which session the minutes belong to. Check constraint: a row without times must have one, and vice versa |
 | raw_display_name | text, nullable | Exactly as Teams wrote it |
 | raw_email | text, nullable | Exactly as Teams wrote it. Sometimes a UPN, sometimes nothing |
 | raw_participant_role | text, nullable | Organizer, Presenter, Attendee |
@@ -347,34 +351,39 @@ What falls through lands in the queue with a fuzzy name suggestion. Confirming w
 
 ### attended_minutes(person, event)
 
-The one place attendance is aggregated. Never compute it inline.
+The one place attendance is aggregated. Never compute it inline. It returns the minutes
+**per session**, and the event total is their sum.
 
 1. Take the event's **active** rows whose `person` resolves to this person.
-2. **Timed rows** (`join_at`/`leave_at` set, which includes room-roster rows): clamp each
-   interval to the credit window, drop the empty ones, **merge overlapping intervals**, and
-   sum the merged lengths. `duration_seconds` is deliberately ignored for these rows,
+2. **Timed rows** (`join_at`/`leave_at` set, which includes room-roster rows): take the
+   **union** of their intervals. `duration_seconds` is deliberately ignored for these rows,
    because summing it double-counts overlaps and counts waiting-room time.
-3. **Hours-only rows** (no times): add `duration_seconds` on top.
-4. Cap the total at the event's own length (effective start to effective end, without the
-   grace), then convert to whole minutes, rounding down. Joining early can make up for
-   leaving early, but nobody attends for longer than the event lasted, and this is the
-   figure a certificate line prints. When hours-only rows are what pushed the total over,
-   the function logs a warning and the person is flagged for review: it usually means a
-   duplicate manual row.
-5. Report the source: `teams` (only Teams rows), `manual` (only manual or room-roster
+3. For each session, measure how much of that union falls inside the session's own times.
+   The first session opens **five minutes early** and the last closes **five minutes late**
+   (symmetric grace at the ends of the whole event, not around each session). Time
+   between sessions counts for nothing.
+4. **Hours-only rows** (no times) name a session; their `duration_seconds` is added to it.
+5. Cap each session at its own length, then convert to whole minutes, rounding down.
+   Joining early can make up for leaving early, but nobody attends a talk for longer than
+   it ran, and this is the figure a certificate line prints. When hours-only rows are what
+   pushed a session over, the function logs a warning and the person is flagged for
+   review: it usually means a duplicate manual row.
+6. Report the source: `teams` (only Teams rows), `manual` (only manual or room-roster
    rows), `mixed` (both), or `self_reported` (see below).
 
+`sessions_attended(person, event)` is the sessions where that measure reaches at least
+half the session's length. It decides which sessions a person is asked to evaluate, and
+which titles a certificate line lists.
+
 `attended_minutes` lives in the attendance app and only knows about attendance rows. The
-self-report fallback sits one layer up, in `credits.rules.creditable_minutes(person,
-event)`, because evaluations belong to the credits app. When the person has no active rows
-at all, it falls back to the sum of `self_reported_minutes` across their submissions for
-the event's sessions, capped at the event's length, with source `self_reported`. Credit
-resting on a self-report alone is always flagged for review. When both exist and the
-person claims more than was recorded, by more than 15 minutes, they are flagged for review
-rather than one figure being silently picked. Claiming less is not flagged: self-reports
-are per session and recorded minutes are for the whole event, so someone who evaluated one
-session of three has simply reported on that one. Recorded minutes still win, even when
-they add up to zero.
+self-report fallback sits one layer up, in `credits.rules.creditable_time(person, event)`,
+because evaluations belong to the credits app. When the person has no active rows at all,
+each session they evaluated falls back to that submission's
+`self_reported_session_minutes`, capped at the session's length, with source
+`self_reported`. Credit resting on a self-report alone is always flagged for review. When
+both exist and the person claims more than was recorded for that session, by more than 15
+minutes, they are flagged for review rather than one figure being silently picked.
+Claiming less is not flagged. Recorded minutes still win, even when they add up to zero.
 
 The docstring repeats step 2 in plain words. Someone will try to "optimize" this back into
 a `SUM(duration_seconds)`, and that would be wrong.
@@ -425,12 +434,40 @@ Credit needs two things: the person was there, and they completed the evaluation
 | person | FK Person | From the signed-in session, never typed |
 | session | FK Session | One submission per lecture attended |
 | submitted_at | timestamptz | |
-| self_reported_minutes | smallint | What they claim |
-| attestation | bool | They confirm the hours are accurate. Required |
+| self_reported_session_minutes | smallint | How long they say they attended this lecture |
+| attestation | bool | They confirm the minutes are accurate. Required |
 | is_complete | bool | All required objective questions answered |
 
-Unique on `(person, session)`. Editable by the submitter until the event closes, then
-locked.
+Unique on `(person, session)`. A submission is accepted only while a window is open for
+that person and session (below). Saving a complete submission closes any reopened window.
+
+### EvaluationWindow
+
+The form is open for **one week from the event date** by default (`EVALUATION_WINDOW_DAYS`).
+After that, an attendee may ask for another week for a session; the request is granted
+automatically, because they did the attending and the form is work they still owe. The
+window closes as soon as they submit a complete evaluation, or when the week passes.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| id | UUID pk | |
+| person | FK Person | |
+| session | FK Session | |
+| opened_at | timestamptz | |
+| expires_at | timestamptz | A week after `opened_at` |
+| reason | text | What the attendee (or staff) said |
+| granted_by | FK User, nullable | Null when the attendee asked for it themselves |
+| closed_at | timestamptz, nullable | Set when a complete evaluation is submitted |
+
+Frozen after insert except `closed_at`. Every grant is audit-logged.
+
+Limits on self-service: at most `EVALUATION_REOPENINGS_MAX` (three) per person per session,
+and never past the end of the accreditation year containing the event
+(`ACCREDITATION_YEAR_END`, a month and day). A program admin can override both, which is
+logged against them.
+
+The credits page lists sessions attended but not yet evaluated, each with the open form,
+a "request another week" action, or the reason neither is available.
 
 ### EvaluationResponse
 
@@ -450,25 +487,39 @@ question is reworded.
 
 No stored credit total anywhere except an issued certificate.
 
-Credit is **per event**. Each rule lives in its own function:
+Credit is **earned per session and summed per event**. Each rule lives in its own
+function:
 
 ```
-evaluation_gate(person, event)      -> bool       # rule still open, see decisions.md;
-                                                  # for now: one complete evaluation
-creditable_minutes(person, event)   -> minutes, source, needs_review
-round_credits(hours)                -> Decimal    # round DOWN to the nearest 0.25
-computed_credits(person, event)     = 0 if not gate, else
-                                      min(round_credits(creditable_minutes / 60),
-                                          event.accredited_credits)
-event_credits(person, event)        = max(computed_credits + sum(adjustment deltas), 0)
+evaluation_gate(person, session)       -> bool     # a complete evaluation of THAT session
+qualifying_minutes(minutes, length)    -> int      # within 5 minutes of the whole session
+                                                   # counts as the whole session
+creditable_time(person, event)         -> per session: minutes, source, attended,
+                                          evaluated, review reasons
+round_credits(hours)                   -> Decimal  # round DOWN to the nearest 0.25
+computed_credits(person, event)        = min(round_credits(sum over sessions of
+                                                qualifying minutes, counted only if that
+                                                session passes the gate) / 60,
+                                             event.accredited_credits)
+event_credits(person, event)           = max(computed_credits + sum(adjustment deltas), 0)
 ```
 
-Credit is rounded down because overstating it is the error you can't recover from. It is
-rounded **per event**, so a certificate's total is exactly the sum of its printed lines. The
-cost is about an eighth of a credit per event on average.
+The gate is per session so that evaluating one talk cannot claim credit for three.
 
-Self-reported minutes are only a fallback (see `attended_minutes`). Evaluation stays per
-session, because the objective questions belong to a lecture.
+The five-minute tolerance exists because round-down alone has a cliff: without it, joining
+sixty seconds late costs a quarter credit. It is symmetric with the grace before the first
+session. 59 minutes of a 60-minute session is a full hour; 52 minutes is 52.
+
+Rounding happens **once, on the event total**, so a certificate's total is exactly the sum
+of its printed lines and three 20-minute sessions attended in full are one credit rather
+than three quarters.
+
+`accredited_credits` stays a field rather than being computed from the sessions, so an
+accrediting body can approve fewer credits than the clock says.
+
+Credit is a moving target: a reopened evaluation can earn credit after a certificate was
+issued. That is not an error. The person's admin page shows earned against certified
+credit per event, and the answer is a reissue, on request.
 
 ### CreditAdjustment
 
@@ -502,6 +553,7 @@ because someone will file it with a college.
 | licence_number, licence_jurisdiction | text | Snapshotted, **as entered**, never the normalized form |
 | verification_code | text, unique, indexed | Prints on the PDF |
 | template_version | text | Which layout and wording was used |
+| pdf_path | text | Where the PDF is, relative to `UPLOAD_ROOT`. A hash with no recorded path is half a control |
 | pdf_sha256 | text | Proves the file wasn't altered after issue |
 | issued_at | timestamptz | |
 | issued_by | FK User | |
@@ -519,7 +571,7 @@ One line per **event**. Per-session credit does not exist.
 | event | FK RoundsEvent | For traceability only. Nothing printed is read through it |
 | event_title | text | Snapshotted |
 | event_date | date | Snapshotted |
-| session_titles | JSON array of text | Snapshotted. Print-only, never queried |
+| session_titles | JSON array of text | The sessions attended (at least half of each), snapshotted. Print-only, never queried |
 | attended_minutes | int | Snapshotted. The number someone disputes |
 | minutes_source | enum | teams, manual, mixed, self_reported |
 | computed_credits | decimal | From the credit function |

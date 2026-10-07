@@ -1,7 +1,8 @@
 # Session notes: step 1
 
-Written 2026-10-06. Covers everything built in the first session: environment setup,
-the pre-build review, and step 1 of the build order (models, migrations, admin, tests).
+Written 2026-10-06, updated the same day after your review (sections A to H). Covers
+everything built in the first session: environment setup, the pre-build review, step 1 of
+the build order (models, migrations, admin, tests), and the per-session credit redesign.
 Step 2 has not been started. Nothing has been pushed; the repo has no remote.
 
 ## How to run it
@@ -12,60 +13,106 @@ python manage.py runserver
 ```
 
 Then open http://127.0.0.1:8000/admin/ and sign in with `DJANGO_SUPERUSER_USERNAME` and
-`DJANGO_SUPERUSER_PASSWORD` from `.env`. The dev database is migrated and already holds the
-seed data.
+`DJANGO_SUPERUSER_PASSWORD` from `.env`. The dev database was rebuilt after the
+redesign and holds the new seed data.
 
 ```powershell
-python -m pytest          # 323 tests, about a minute
+python -m pytest          # 381 tests, about 90 seconds
 python manage.py seed_demo  # only fills an empty database; this one is already seeded
 ```
 
 To start again from nothing: drop and recreate `cme_dev`, run `python manage.py migrate`,
 create a superuser, run `seed_demo`.
 
-## Read this first: five things that need your reaction
+## The redesign after your review (A to H)
 
-1. **Teams rows cannot be created yet.** Step 1 has no parser. The upload screen stores the
-   raw export correctly (hashed, read-only, duplicate-proof), but nothing reads rows out of
-   it. If you run a real event on this before the parser exists, attendance has to be
-   entered as manual rows, each with a reason. The seed data fakes parsed rows so the
-   review screens have something to show.
+Everything in your review is built. In order:
 
-2. **Rounding down is harsher than it sounds.** With round-down to the quarter, 59 recorded
-   minutes of a 1.00-credit hour is 0.75. Anyone who joins one minute late, or any rounds
-   the chair ends at 12:58, loses a quarter credit. The five minutes of grace before the
-   start soften this only for people who join early. You accepted "about an eighth of a
-   credit per event" as the cost; in practice I expect most people in most events to land
-   on 0.75 unless they connect early. Options if that is not what you want: a tolerance
-   (for example, within 5 minutes of the full window counts as full), or set
-   `actual_end_at` to when the chair really ended, which at least makes a short session
-   honest. I built what was decided and changed nothing.
+- **A. Session times.** `Session.start_at` / `end_at`, validated inside the event and
+  non-overlapping, end defaulting to an hour after the start. Attendance is clamped to the
+  union of the sessions; breaks count for nothing; five minutes of grace at the ends of
+  the whole event. `sessions_attended()` is half the session or more. The event's
+  `actual_start_at` / `actual_end_at` are **removed**: with session times they had no job,
+  and keeping two ways to say when a talk ended would have been worse than one.
+- **B. Credit per session, gated per session.** `credits/rules.py` is rewritten.
+  Qualifying minutes per session count only when that session has a complete evaluation;
+  the event total is their sum, capped at `accredited_credits`, which stays a field.
+- **C. The cliff.** `qualifying_minutes()`: within five minutes of a whole session is the
+  whole session, before rounding. 59 of 60 gives 1.00; 52 gives 0.75. Both are tests.
+- **D. Evaluation windows.** `EvaluationWindow` and `credits/windows.py`: a week from the
+  event date, self-service reopenings of a week each, auto-granted and audit-logged, three
+  per person per session, none past the accreditation year; program-admin override,
+  logged. `sessions_needing_evaluation()` returns what the credits page will list, with
+  the state for each session (open, reopened, can request, limit reached, past year end).
+  No page yet: that is step 2.
+- **E. Moving target.** The person's admin page has an "earned versus certified" table
+  per event (`credits/reports.py: person_standing`). Reissue stays manual.
+- **F.** Flag unchanged; field renamed `self_reported_session_minutes`; the cap and the
+  coordinator rule kept.
+- **G.** The admin warns on a room-roster row whose device row was superseded.
+  `Certificate.pdf_path` added. A closed event cannot change status.
+- **H.** `is_complete` stays stored; the rest left as they were.
 
-3. **The evaluation gate is the lenient candidate.** `credits/rules.py: evaluation_gate`
-   passes on one complete evaluation for any session of the event. The stricter candidate
-   ("every session their attendance overlapped") cannot be built from the current schema:
-   a `Session` has a position and a duration but no start time, so there is nothing to
-   overlap against. Deriving start times from position and duration would be a guess.
-   If you want the strict rule, `Session` needs `start_at`/`end_at`.
+Tests you asked for, by name: `test_a_break_between_sessions_does_not_count`,
+`test_attending_only_the_middle_session`,
+`test_under_half_a_session_is_not_counted_as_attended`,
+`test_credit_appears_after_a_late_evaluation`, `test_submission_inside_the_default_week`,
+`test_submission_outside_the_default_week`, `test_acceptance_with_an_active_reopening`,
+`test_the_window_closes_when_a_complete_evaluation_is_submitted`,
+`test_no_self_service_reopening_past_the_accreditation_year`.
 
-4. **The "minutes disagree" flag is one-directional.** The docs say to flag when recorded
-   and self-reported minutes diverge by more than 15. Self-reports are per session and
-   recorded minutes are per event, so a symmetric check flagged nearly everyone who
-   evaluated one session of three. It now fires only when the claim is more than 15
-   minutes **above** what was recorded, plus always when credit rests on a self-report
-   alone. This also exposes an ambiguity worth settling: is `self_reported_minutes` what
-   they attended of that session, or of the whole event?
+### Decisions in the redesign that your review did not settle
 
-5. **Attended minutes are capped at the event's own length, not the credit window.** You
-   asked for the total to be capped at "the event window length" so a 70-minute event
-   never prints 100 minutes. I read that as the event's actual length (start to end)
-   rather than the credit window, which is five minutes longer because of the grace. So
-   someone who joins at 11:55 and stays to 13:00 shows 60 minutes, not 65. The grace now
-   means "joining early can make up for leaving early", never "more minutes than the
-   event lasted". If you meant the window including grace, it is one line in
-   `attended_minutes`. The cap is logged, and the person flagged for review, only when
-   hours-only manual rows are what pushed the total over; early-join minutes being
-   trimmed is ordinary and silent.
+1. **Rounding happens once, on the event total, not per session.** You wrote "per
+   session ... round down to the quarter as before". Rounding each session separately
+   would turn three 20-minute talks attended in full into 3 x 0.25 = 0.75 rather than
+   1.00, and would break "total equals the sum of the lines" the moment sessions are not
+   multiples of 15 minutes. Minutes are gathered per session, then rounded once per
+   event. Your two examples (59 of 60 is 1.00, 52 is 0.75) hold either way; a test pins
+   the three-short-sessions case. Say so if you want per-session rounding regardless.
+2. **Hours-only manual rows now name a session** (`AttendanceRecord.session`, with a
+   check constraint). Minutes without times had to belong somewhere to be credited per
+   session. Timed rows leave it blank and are matched by their times. The migration
+   assigned any existing hours-only row to its event's first session.
+3. **Grace at the ends only, not the tolerance.** Grace (five minutes before the first
+   session, after the last) is about when time starts counting. The tolerance (within
+   five minutes of a whole session counts as whole) is per session, including the middle
+   ones. Someone who arrives four minutes late to every talk gets every talk in full.
+4. **Partial attendance still earns partial credit if evaluated.** The 50% rule decides
+   who is *asked* to evaluate and what the certificate lists, not who may. Someone who
+   caught the last 20 minutes of a talk and evaluates it anyway earns 20 minutes.
+5. **The default window opens when the session starts and closes at midnight at the end
+   of the seventh day after the event date.** "One week from the event date" needed an
+   hour; midnight local time is the one nobody will argue with.
+6. **A draft (incomplete) submission does not close a reopened window.** Only a complete
+   one does, so a person who saves half a form keeps their week.
+7. **The model refuses a submission with no window open**, staff included. Staff
+   entering a paper form late grant a window first (Evaluation windows, add), which is
+   the logged override. The seed and tests create past submissions directly.
+8. **A self-service grant is logged with the attendee as actor**; an override with the
+   staff user. `granted_by` null means self-service.
+9. **Closed is final in every direction**, not only back to draft. Held, published and
+   draft stay editable.
+10. **Certified credit counts only valid certificates** (not revoked, not superseded)
+    in the earned-versus-certified table.
+11. **Certificate lines will list the sessions attended (half or more)**, which is what
+    `sessions_attended()` gives. A session evaluated for partial credit below that line
+    earns its minutes but is not listed by title. Issuance is not built, so this is
+    recorded, not coded.
+12. **The seed events are now noon to three with three one-hour sessions**, since that
+    is the typical event. Every expected figure in the seed tests was recomputed by hand
+    for the awkward cases (Côté's 54 minutes, one short of the tolerance; Nguyen's lobby
+    time; the room roster copy) and by the code for the rest.
+
+### Things I would still raise
+
+1. **Teams rows cannot be created yet.** Step 1 has no parser. Entering a real event
+   before step 2 means manual rows. You agreed to build the parser before the next rounds.
+2. **Staff entering a late paper evaluation have to grant a window first.** Two steps
+   instead of one. It keeps every late submission visibly authorised; tell me if it is
+   too much friction.
+3. **Three one-hour sessions means `accredited_credits` is usually 3.00**, and the seed
+   says so. The admin does not derive it from the sessions, on purpose.
 
 ## What was built
 
@@ -127,17 +174,17 @@ permissions by hand in the admin will not stick.**
 
 ### Credit and attendance
 
-- **Grace minutes count as attended time, up to the event's length.** Joining at 11:57
+- **Grace minutes count as attended time, up to the session's length.** Joining at 11:57
   and leaving at 12:50 is 53 minutes. Joining at 11:40 earns five early minutes, not
-  twenty. See item 5 above for the cap.
-- **A late actual start shortens the event.** If `actual_start_at` is 12:15, the event
-  lasted 45 minutes and nobody can show more than 45.
+  twenty.
+- **A late session start shortens the session.** If a talk's `start_at` is 12:15, it
+  lasted 45 minutes and nobody can show more than 45 for it.
 - **Recorded attendance wins even when it adds up to zero.** Someone who only sat in the
   lobby has rows, so their self-report is not used; they are flagged instead.
 - **Credit resting on a self-report alone is always flagged for review**, and is capped
-  at the event's length.
+  at the session's length.
 - **The event page says why someone is flagged**: claims more than was recorded,
-  self-reported only, or rows adding up to more than the event lasted.
+  self-reported only, or rows adding up to more than a session lasted.
 - **Attended minutes round down to whole minutes** before the credit calculation.
 - **Credit adjustments go in steps of 0.25 and cannot be zero**, so a certificate total
   stays a multiple of a quarter.
@@ -237,17 +284,13 @@ permissions by hand in the admin will not stick.**
 
 ## Things I am unsure about
 
-- **Whether `is_complete` should be stored.** It is a checkbox whoever enters the
-  evaluation sets. Once the evaluation form exists it should probably be computed from
-  the responses.
-- **Evaluation locking is not enforced.** "Editable until the event closes" needs the
-  attendee form; the admin can edit at any time (logged).
-- **Event status is a plain field.** Nothing stops `closed` going back to `draft`, and
-  `closed` does not yet stop anything.
+- **`is_complete` is stored**, per H. Compute it from the responses when the form exists.
+- **Editing an existing evaluation is not window-checked.** Only new submissions are.
+  The admin can edit at any time (logged); the attendee form will decide its own rule.
+- **A closed event still does not stop anything by itself** beyond its own status; the
+  evaluation windows are what stop late submissions.
 - **Approving a `SignInRequest` only records the decision.** It does not create a person
   or send anything; that belongs with sign-in.
-- **`Certificate` has no column for where its PDF is stored.** The doc says to store the
-  PDF but gives no field. I expect to derive the path from the id when issuing is built.
 - **The audit log's IP will be `127.0.0.1` behind Caddy** until the forwarded header is
   read. That is a deployment-step change, not done here.
 - **Session length.** Django's default two weeks applies to the admin. The 90-day figure
@@ -269,11 +312,15 @@ Sign in and try these:
   self-report; after it, on 70 recorded minutes.
 - **Attendance records → filter "Unmatched"**: six rows. Three are "Lea B." rejoins from
   an unknown address. Pick Léa Bouchard on one and save: the other two follow.
-- **Rounds events → open either event**: the per-person credit table at the bottom, with
-  rejoins (Côté, 57 minutes, 0.75), laptop and phone at once (Haddad, 60 not 85), lobby
-  time clamped (Nguyen, 36), a room roster (Lavoie, Roy), superseded rows (Sharma), an
-  adjustment (Okafor) and a self-report-only case (Morin).
+- **Rounds events → open either event**: the per-person credit table at the bottom, now
+  with sessions attended and evaluated out of three. Rejoins (Côté: 54 minutes of the
+  first talk, one short of the tolerance, 0.75), laptop and phone at once (Haddad, two
+  talks evaluated, 2.00), lobby time clamped (Nguyen), a room roster (Lavoie, Roy),
+  superseded rows (Sharma), an adjustment (Okafor), a self-report-only case (Morin), and
+  on the second event a talk that ran over (Gagnon, 65 minutes).
 - **Sessions → filter "A presenter has no declaration"**: Haddad.
+- **Evaluation windows**: Bouchard asked for another week on the first talk.
+- **People → Haddad → "Credit, earned versus certified"**: 2.00 earned, nothing certified.
 - **Audit log**: everything the seed did by hand, plus your own sign-in.
 
 All names and addresses in the seed data are fictional.
@@ -283,4 +330,6 @@ All names and addresses in the seed data are fictional.
 One commit per step, in order: repo hygiene, the schema revision, settings, peer
 authentication, design notes, people and authorization, events and sessions, attendance,
 credits, certificates, audit, services, the review-flag change, admin, staff roles, seed
-data and admin tests, multi-tenant docs, the attendance cap and its tests, these notes. `git log --oneline` shows them.
+data and admin tests, multi-tenant docs, the attendance cap and its tests, these notes,
+run.bat, then the per-session redesign in three commits (code and migrations, seed and
+admin tests, docs and notes). `git log --oneline` shows them.

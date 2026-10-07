@@ -50,16 +50,56 @@ looked up a colleague's number.
 Hours come from the Teams export for the whole three-session block, capped at the event's
 accredited credits.
 
-**Credit is rounded down to the nearest quarter, per event.**
-Down, because overstating credit is the error that can't be recovered from. Per event,
-because a certificate prints lines and a total, and a total that doesn't equal the sum of
-its lines makes an accreditor distrust the whole document. Accepted cost: about an eighth
-of a credit per event, roughly three credits a year for someone who attends everything.
+**Sessions have their own times, and attendance is measured against them.**
+Presenters enter a start and end time when they submit; the end defaults to an hour after
+the start. A typical event is three one-hour sessions. Attended time is clamped to the
+sessions, not the event: time in the Teams room during a break is not educational
+activity. A talk that runs over is fixed once, on its end time. The event's own
+`actual_start_at` / `actual_end_at` fields were removed; they had no job left.
 
-**Only time inside the event window counts.**
-Waiting-room time isn't educational activity. Each join interval is clamped to the event
-window, with five minutes' grace at the start. `actual_start_at` / `actual_end_at` on the
-event override the schedule, so a session that runs over is fixed once, not per person.
+**Credit is earned per session and gated per session.**
+Qualifying minutes per session, counted only when that session has a complete
+evaluation, summed per event. The earlier event-level gate ("any one complete
+evaluation") would have let someone evaluate one talk and claim credit for three. The
+stricter candidate from the earlier open question is now buildable, because sessions have
+times, and this is it. `accredited_credits` stays a field so an accrediting body can
+approve fewer credits than the clock says.
+
+**Credit is rounded down to the nearest quarter, once per event.**
+Down, because overstating credit is the error that can't be recovered from. Once per
+event, because a certificate prints lines and a total, and a total that doesn't equal the
+sum of its lines makes an accreditor distrust the whole document; and because rounding
+each session separately would turn three full 20-minute talks into three quarters of a
+credit.
+
+**Within five minutes of a whole session counts as the whole session.**
+Round-down alone has a cliff: joining sixty seconds late cost a quarter credit, which is
+not defensible. The asymmetry was the bug (grace before the start, none at the end). The
+tolerance is symmetric with the grace, applied per session, before rounding. The cap at
+the session's real length stays. 59 minutes of 60 is 1.00; 52 is 0.75.
+
+**Grace is five minutes at each end of the event, not around each session.**
+Joining early for the first talk and lingering after the last are ordinary; wandering in
+late from a break is not.
+
+**A session counts as attended at half its length.**
+Below that, nobody is chased for an evaluation of a talk they caught the end of. They can
+still evaluate it and earn the minutes they were there for.
+
+**The evaluation form is open for a week, then reopenable on request.**
+One week from the event date by default. After that an attendee can ask for another week
+for a session, granted automatically: they already attended and the hours are recorded;
+the form is work they have to do. Each grant is audit-logged, limited to three per person
+per session, and never past the end of the accreditation year containing the event
+(a setting). Program admins can override, logged. The window closes on submission.
+
+**Credits are a moving target; certificates are correct at issue.**
+Someone reopening in November for a January event earns credit after a certificate may
+have been issued. That is not an error. The person's page shows earned against certified
+credit; the fix is a reissue through `supersedes`, on request, never automatic.
+
+**Closed events stay closed.**
+Once totals are frozen, reopening silently moves them. The status can only move forward.
 
 **Attended time is a union of intervals, not a sum of rows.**
 Someone on a laptop who also dials in by phone produces overlapping rows. Overlaps are
@@ -74,7 +114,13 @@ same direction: the reissue carries `supersedes`.
 
 **Room-roster rows copy the join and leave times of the row they sat in.**
 A copied window is an observation about a device that really was in the meeting. The times
-can be edited for someone who walked in late, with the reason saying so.
+can be edited for someone who walked in late, with the reason saying so. A roster row stays
+active if the device row is later superseded, but the admin warns on it: if the device's
+times were wrong, so are the copies.
+
+**Hours-only manual rows name a session.**
+A row with minutes but no times has to say which talk the minutes belong to, or they could
+not be credited to one. Timed rows are matched to sessions by their times.
 
 **Store what was typed, match on a normalized copy.**
 A certificate that prints a licence number different from the one on the licence is worse
@@ -139,16 +185,6 @@ split is the entire retrofit. No provider abstraction, no job queue, no scaffold
 
 ## Open
 
-**The evaluation gate rule.**
-Credit is per event but evaluation is per session. Two candidates:
-
-- A complete evaluation for every session their attendance overlapped. More defensible to
-  an accreditor.
-- Any one complete evaluation for the event. Much less work for someone who sat through all
-  three.
-
-Write it as one function either way. Decide after one real cycle.
-
 **Retention period.**
 Law 25 gives a right to erasure; accreditation bodies require retention for several years.
 These pull against each other. Check what CMQ actually requires before committing to a
@@ -173,3 +209,7 @@ uploads and rows so there is something to work with.
 **Series name.**
 `RoundsEvent.title` defaults to a `SERIES_NAME` setting. The value in settings is a
 placeholder until the real name is confirmed.
+
+**Is `is_complete` stored or computed?**
+Stored for now, set by whoever enters the evaluation. Compute it from the responses once
+the attendee form exists.
