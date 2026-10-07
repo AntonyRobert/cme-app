@@ -103,6 +103,21 @@ listed). Nothing pushed.
   page; the event and session forms have the FK. Attendee form at `/evaluate/<session>/`
   (stable, for the step-5 email), linked from `/me/`. Eighteen tests in
   `credits/tests/test_evaluation_forms.py`, including the four you listed.
+- **The evaluation gate reversed** (your latest message). `Program.require_evaluation_for_credit`,
+  default off; `evaluation_required(program)` is the one function, consulted by
+  `SessionCredit` (`unlocked` = evaluated or not gated) for proposed, confirmed and
+  blocking minutes, by `signoff_status`, and by the windows module (`submission_allowed`,
+  `window_state`, `request_reopening`), which is bypassed when off: open and editable until
+  the event closes, `STATE_EVENT_CLOSED` after. `evaluation_gate` and every window rule
+  are untouched and resume when the switch is on. The credits page has "Help us improve"
+  for ungated programs (no red, no "pending", the figure stands alone) and keeps the old
+  "Evaluations to complete" block for gated ones. Overall-activity evaluation:
+  `EvaluationSubmission.event` with `session` null, one per person per event, from
+  `Program.activity_evaluation_form`, at `/evaluate/event/<id>/`, listed on the credits
+  page for every attended event until it closes; `activity_evaluation_cadence` stored.
+  `Program.accreditation_statement` snapshotted onto `Certificate` at issue and rendered
+  by `certificates/render.py` (an HTML rendering from the snapshot only; the PDF step
+  will wrap it). Ten tests in `credits/tests/test_gate.py`.
 - **Conditional requirement and drafts** (your two messages on evaluations; the "revise
   the mandatory rule" one read as the later of the two and won). `EvaluationQuestion.required`
   is derived from the kind (Likert, yes/no, choice, per-objective mandatory; free text
@@ -167,6 +182,18 @@ listed). Nothing pushed.
   worse than one that works: the view checks the window, validates required questions,
   writes the submission against the resolved version, and shows a complete one read-only
   with its own wording. The email that links to it is still step 5.
+- **The shared test program has the gate ON.** Most of the suite was written against
+  the gate and keeps testing it (`programs/tests/factories.py`); tests of the default
+  path make a named program, which gets the production default (off). Four of the
+  earlier form tests that are about the gate now opt in by name.
+- **With the gate off, a complete evaluation is editable until the event closes** (the
+  page says so); with it on, a complete one is final, as before. Once the event closes
+  the page is read-only either way.
+- **Unsigned minutes block a certificate even with no evaluation when the gate is off**,
+  because they would carry credit: sign-off is still the control between recorded
+  attendance and credit; the gate was never that.
+- **`activity_evaluation_cadence = annual` is stored, not built.** Per event is what
+  runs; the field exists so the choice has a home when CPD answers.
 - **Re-seeded rather than remapped.** `objective_met` maps cleanly to `objectives_met`,
   but `overall` is not `relevance`, and no old row answered `commercial_bias`; a remap
   would still have read as incomplete, or would have invented answers. Production has

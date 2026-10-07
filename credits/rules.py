@@ -64,10 +64,21 @@ def credits_for_minutes(minutes, rate=Decimal("1")):
     return (Decimal(minutes) / 60 * Decimal(rate)).quantize(ZERO, rounding=ROUND_FLOOR)
 
 
+def evaluation_required(program):
+    """
+    Does attendance credit in this program need a complete evaluation of
+    the session? Off by default: the Royal College standard requires that
+    the opportunity to evaluate be offered, not that it be taken. A program
+    may turn it on; then evaluation_gate and the window rules apply.
+    """
+    return bool(program.require_evaluation_for_credit)
+
+
 def evaluation_gate(person, session):
     """
     Is this session's ATTENDANCE credit unlocked? Yes when the person has a
-    complete evaluation of that session. Teaching credit has no gate.
+    complete evaluation of that session. Teaching credit has no gate. Only
+    consulted when evaluation_required(program) is true.
     """
     return (
         EvaluationSubmission.objects.for_person(person)
@@ -99,6 +110,13 @@ class SessionCredit:
     # Minutes a staff member has signed off, or None while nothing has been.
     confirmed_minutes: int | None = None
     review_reasons: tuple = ()
+    # The program's evaluation gate. When off, credit follows attendance alone.
+    gated: bool = False
+
+    @property
+    def unlocked(self):
+        """Evaluation is not in the way: the gate is off, or it is satisfied."""
+        return self.evaluated or not self.gated
 
     @property
     def credited_minutes(self):
@@ -109,14 +127,14 @@ class SessionCredit:
         """
         if self.presented:
             return 0
-        return self.minutes if self.evaluated else 0
+        return self.minutes if self.unlocked else 0
 
     @property
     def confirmed_credited_minutes(self):
-        """Attendance minutes that count toward CONFIRMED credit: signed off and evaluated."""
+        """Attendance minutes that count toward CONFIRMED credit: signed off, and past the gate if there is one."""
         if self.presented or self.confirmed_minutes is None:
             return 0
-        return self.confirmed_minutes if self.evaluated else 0
+        return self.confirmed_minutes if self.unlocked else 0
 
     @property
     def awaiting_signoff(self):
@@ -126,11 +144,11 @@ class SessionCredit:
     @property
     def blocks_certificate(self):
         """
-        Awaiting sign-off AND evaluated: the minutes would carry credit, so a
-        certificate cannot print until someone signs them. Unevaluated minutes
-        earn nothing either way and block nothing.
+        Awaiting sign-off AND would carry credit (the gate is off, or it is
+        satisfied), so a certificate cannot print until someone signs them.
+        Minutes behind an unsatisfied gate earn nothing and block nothing.
         """
-        return self.awaiting_signoff and self.evaluated
+        return self.awaiting_signoff and self.unlocked
 
     @property
     def teaching_minutes(self):
@@ -268,6 +286,7 @@ def creditable_time(person, event):
     recorded = attended_minutes(person, event)
     presented = presented_session_ids(person, event)
     confirmed = signed_off(person, event)
+    gated = evaluation_required(event.program)
     submissions = {
         s.session_id: s
         for s in EvaluationSubmission.objects.for_person(person).filter(session__event=event)
@@ -307,6 +326,7 @@ def creditable_time(person, event):
                 source=source,
                 attended=attended,
                 evaluated=evaluated,
+                gated=gated,
                 self_reported_minutes=claimed,
                 presented=is_presenter,
                 confirmed_minutes=confirmed.get(session.pk),

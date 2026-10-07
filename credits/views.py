@@ -15,6 +15,7 @@ from .evaluation_forms import (
     Kind,
     remaining,
     rendered_questions,
+    resolve_activity_form,
     resolve_form,
     response_for,
     responses_by_question,
@@ -76,23 +77,25 @@ def _left(submission):
     return fields, len(items)
 
 
-@public_object(
-    "any signed-in attendee may evaluate a session while its window is open; the "
-    "submission is written for request.person only, and credit still needs attendance"
-)
-@require_http_methods(["GET", "POST"])
-@signed_in
-def evaluate(request, session_id):
-    session = (
-        Session.objects.select_related("event__program").filter(pk=session_id).first()
-    )
-    if session is None:
-        raise Http404
+def _evaluate(request, target):
+    """Shared by the session and the overall-activity forms. `target` is a Session or a RoundsEvent."""
+    from rounds.models import Session
+
+    from .rules import evaluation_required
+
+    is_session = isinstance(target, Session)
+    session = target if is_session else None
+    event = target.event if is_session else target
     person = request.person
-    submission = EvaluationSubmission.objects.filter(person=person, session=session).first()
+    lookup = {"person": person, "session": session} if is_session else {"person": person, "event": event, "session": None}
+    submission = EvaluationSubmission.objects.filter(**lookup).first()
+    gated = is_session and evaluation_required(event.program)
     context = {
         "session": session,
-        "presenters": ", ".join(str(p.person) for p in session.session_presenters.select_related("person")),
+        "event": event,
+        "is_session": is_session,
+        "gated": gated,
+        "presenters": ", ".join(str(p.person) for p in session.session_presenters.select_related("person")) if is_session else "",
         "submission": submission,
         "errors": {},
     }
@@ -100,23 +103,35 @@ def evaluate(request, session_id):
     if submission is not None:
         version = submission.form_version  # October's wording, whatever March did
     else:
-        resolution = resolve_form(session)
+        resolution = resolve_form(session) if is_session else resolve_activity_form(event.program)
         version = resolution.version
         if version is None:
-            context["closed"] = "This session has no evaluation form set up yet. Ask the program office."
+            context["closed"] = "There is no evaluation form set up for this yet. Ask the program office."
             return render(request, "credits/evaluate.html", context)
     questions = rendered_questions(version, session)
     context["questions"] = questions
 
-    if submission is not None and submission.is_complete:
+    # Open? A session evaluation follows the program's rule (window, or until the event
+    # closes); the overall-activity one is open until the event closes.
+    if is_session:
+        allowed = submission_allowed(person, session)
+    else:
+        allowed = not event.is_closed
+    # With the gate on, a complete evaluation is final; without it, it can be changed until the event closes.
+    final = submission is not None and submission.is_complete and (gated or not allowed)
+    context["readonly"] = final
+
+    if final:
         context["answers"] = _current_answers(submission, questions)
         context["minutes"] = submission.self_reported_session_minutes
         return render(request, "credits/evaluate.html", context)
 
-    if not submission_allowed(person, session):
+    if not allowed:
         context["closed"] = (
             "The evaluation window for this session has closed. You can ask for another "
             "week from your credits page."
+            if gated
+            else "This event is closed, so its evaluations can no longer be changed."
         )
         return render(request, "credits/evaluate.html", context)
 
@@ -132,7 +147,7 @@ def evaluate(request, session_id):
     answers = _posted_answers(request, questions)
     errors = _validate(questions, answers)
     minutes = request.POST.get("minutes", "").strip()
-    if minutes and not (minutes.isdigit() and 0 <= int(minutes) <= session.length_minutes):
+    if is_session and minutes and not (minutes.isdigit() and 0 <= int(minutes) <= session.length_minutes):
         errors["minutes"] = f"Whole minutes between 0 and {session.length_minutes}."
     attested = bool(request.POST.get("attestation"))
     context.update({"answers": answers, "minutes": minutes, "attested": attested})
@@ -142,19 +157,49 @@ def evaluate(request, session_id):
 
     with transaction.atomic():
         if submission is None:
-            submission = EvaluationSubmission(person=person, session=session, form_version=version)
+            submission = EvaluationSubmission(form_version=version, **lookup)
             submission.full_clean()
             submission.save()
-        submission.self_reported_session_minutes = int(minutes) if minutes else None
-        submission.attestation = attested
+        if is_session:
+            submission.self_reported_session_minutes = int(minutes) if minutes else None
+            submission.attestation = attested
         submission.save()
         for q in questions:
             store_answer(submission, q, answers.get(q.field_name))
     submission.refresh_from_db()
     context.update({"submission": submission, "errors": {}})
     context["answers"] = _current_answers(submission, questions)
+    context["readonly"] = submission.is_complete and gated
     if not submission.is_complete:
         context["left_fields"], context["left"] = _left(submission)
         context["submitted"] = request.POST.get("action") == "submit"
-        context["saved"] = True
+    context["saved"] = True
     return render(request, "credits/evaluate.html", context)
+
+
+@public_object(
+    "any signed-in attendee may evaluate a session while its form is open; the "
+    "submission is written for request.person only"
+)
+@require_http_methods(["GET", "POST"])
+@signed_in
+def evaluate(request, session_id):
+    session = Session.objects.select_related("event__program").filter(pk=session_id).first()
+    if session is None:
+        raise Http404
+    return _evaluate(request, session)
+
+
+@public_object(
+    "any signed-in attendee may evaluate an event's overall activity until it closes; the "
+    "submission is written for request.person only"
+)
+@require_http_methods(["GET", "POST"])
+@signed_in
+def evaluate_event(request, event_id):
+    from rounds.models import RoundsEvent
+
+    event = RoundsEvent.objects.select_related("program").filter(pk=event_id).first()
+    if event is None:
+        raise Http404
+    return _evaluate(request, event)

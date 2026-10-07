@@ -92,6 +92,8 @@ class LineFigures:
 @dataclass(frozen=True)
 class CertificateFigures:
     lines: list = field(default_factory=list)
+    # Names the accredited CPD provider; snapshotted onto the issued certificate.
+    accreditation_statement: str = ""
 
     @property
     def attendance_credits(self):
@@ -147,4 +149,4 @@ def certificate_figures(person, program, period_start, period_end):
                 teaching_credits=b.teaching_credits,
             )
         )
-    return CertificateFigures(lines=lines)
+    return CertificateFigures(accreditation_statement=program.accreditation_statement, lines=lines)

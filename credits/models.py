@@ -230,12 +230,37 @@ class EvaluationQuestion(UUIDModel):
 class EvaluationSubmissionQuerySet(PersonOwnedQuerySet, ProgramScopedQuerySet):
     program_lookup = "session__event__program"
 
+    def for_programs(self, programs):
+        ids = [getattr(p, "pk", p) for p in programs]
+        return self.filter(Q(session__event__program__in=ids) | Q(event__program__in=ids))
+
+    def for_sessions(self):
+        return self.filter(session__isnull=False)
+
+    def for_events(self):
+        """The overall-activity evaluations."""
+        return self.filter(event__isnull=False)
+
 
 class EvaluationSubmission(UUIDModel):
-    """One person's evaluation of one session. Half of what credit requires."""
+    """
+    One person's evaluation of one session, or of one event's overall
+    activity (then `event` is set and `session` is null). Only a session
+    evaluation can gate credit, and only when the program says so.
+    """
 
     person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="evaluations")
-    session = models.ForeignKey(Session, on_delete=models.PROTECT, related_name="evaluations")
+    session = models.ForeignKey(
+        Session, null=True, blank=True, on_delete=models.PROTECT, related_name="evaluations"
+    )
+    event = models.ForeignKey(
+        RoundsEvent,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="activity_evaluations",
+        help_text="Set, with session blank, for the overall-activity evaluation.",
+    )
     form_version = models.ForeignKey(
         EvaluationFormVersion,
         on_delete=models.PROTECT,
@@ -267,16 +292,41 @@ class EvaluationSubmission(UUIDModel):
             models.UniqueConstraint(
                 fields=["person", "session"], name="evaluationsubmission_one_per_session"
             ),
-            # A draft may lack both; a complete submission is attested with minutes.
+            models.UniqueConstraint(
+                fields=["person", "event"],
+                condition=Q(session__isnull=True),
+                name="evaluationsubmission_one_activity_per_event",
+            ),
+            models.CheckConstraint(
+                condition=Q(session__isnull=False, event__isnull=True)
+                | Q(session__isnull=True, event__isnull=False),
+                name="evaluationsubmission_session_or_event",
+            ),
+            # A draft may lack both; a complete session evaluation is attested with
+            # minutes. An activity evaluation makes no attendance claim.
             models.CheckConstraint(
                 condition=Q(is_complete=False)
+                | Q(session__isnull=True)
                 | (Q(attestation=True) & Q(self_reported_session_minutes__isnull=False)),
                 name="evaluationsubmission_complete_is_attested",
             ),
         ]
 
     def __str__(self):
-        return f"{self.person} on {self.session}"
+        return f"{self.person} on {self.session or self.event}"
+
+    @property
+    def is_activity(self):
+        return self.session_id is None
+
+    @property
+    def target(self):
+        """The session, or the event for an activity evaluation."""
+        return self.session if self.session_id else self.event
+
+    @property
+    def program(self):
+        return (self.session.event if self.session_id else self.event).program
 
     def clean(self):
         from .windows import submission_allowed
@@ -298,7 +348,7 @@ class EvaluationSubmission(UUIDModel):
         else:
             self.is_complete = False  # no responses can exist before the row does
         super().save(*args, **kwargs)
-        if self.is_complete:
+        if self.is_complete and self.session_id:
             close_windows(self.person, self.session)
 
     def recompute(self):
@@ -309,6 +359,12 @@ class EvaluationSubmission(UUIDModel):
 class EvaluationResponseQuerySet(PersonOwnedQuerySet, ProgramScopedQuerySet):
     person_lookup = "submission__person"
     program_lookup = "submission__session__event__program"
+
+    def for_programs(self, programs):
+        ids = [getattr(p, "pk", p) for p in programs]
+        return self.filter(
+            Q(submission__session__event__program__in=ids) | Q(submission__event__program__in=ids)
+        )
 
 
 class EvaluationResponse(UUIDModel):
@@ -367,6 +423,10 @@ class EvaluationResponse(UUIDModel):
         return result
 
 
+class EvaluationWindowQuerySet(PersonOwnedQuerySet, ProgramScopedQuerySet):
+    program_lookup = "session__event__program"
+
+
 class EvaluationWindow(FrozenFieldsMixin, UUIDModel):
     """
     A reopened evaluation form for one person and one session.
@@ -399,7 +459,7 @@ class EvaluationWindow(FrozenFieldsMixin, UUIDModel):
         null=True, blank=True, help_text="Set when a complete evaluation is submitted."
     )
 
-    objects = EvaluationSubmissionQuerySet.as_manager()
+    objects = EvaluationWindowQuerySet.as_manager()
 
     class Meta:
         ordering = ["-opened_at"]

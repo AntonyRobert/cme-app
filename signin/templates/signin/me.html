@@ -4,9 +4,35 @@
 {% block content %}
 <h1>{{ person.full_name }}</h1>
 
+{% if invited or activities %}
+<h2>Help us improve</h2>
+<p>Your credit stands on its own. Evaluating a talk, or the day as a whole, helps the
+presenters and the program; it takes a minute or two.</p>
+<table>
+  <thead><tr><th>Date</th><th>What</th><th></th></tr></thead>
+  <tbody>
+  {% for event, session, state in invited %}
+    <tr>
+      <td>{{ event.date|date:"j M Y" }}</td>
+      <td>{{ session.title }}</td>
+      <td>{% if state == STATE_EVENT_CLOSED %}<span class="muted">This event is closed.</span>
+          {% else %}<a href="{% url 'credits:evaluate' session.pk %}">{% if session.pk in drafts %}Finish evaluating this session{% else %}Evaluate this session{% endif %}</a>{% if session.pk in drafts %} <span class="muted">({{ drafts|get_item:session.pk }} left)</span>{% endif %}{% endif %}</td>
+    </tr>
+  {% endfor %}
+  {% for event in activities %}
+    <tr>
+      <td>{{ event.date|date:"j M Y" }}</td>
+      <td>{{ event.title }}: the day as a whole</td>
+      <td><a href="{% url 'credits:evaluate_event' event.pk %}">{% if event.pk in activity_drafts %}Finish evaluating the activity{% else %}Evaluate the overall activity{% endif %}</a>{% if event.pk in activity_drafts %} <span class="muted">({{ activity_drafts|get_item:event.pk }} left)</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 {% if to_evaluate %}
 <h2>Evaluations to complete</h2>
-<p>Credit for attending a talk is released when its evaluation is complete.</p>
+<p>In this program, credit for attending a talk is released when its evaluation is complete.</p>
 <table>
   <thead><tr><th>Date</th><th>Talk</th><th></th></tr></thead>
   <tbody>

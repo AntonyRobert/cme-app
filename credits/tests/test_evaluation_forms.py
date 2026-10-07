@@ -274,7 +274,7 @@ def open_session(program):
 
 
 def test_the_form_renders_and_a_complete_submission_is_recorded_against_the_version(ada):
-    program = make_program("Attendee")
+    program = make_program("Attendee", require_evaluation_for_credit=True)
     form = create_standard_form(program)
     session = open_session(program)
     a, b = objectives(session, "Explain X", "Apply Y")
@@ -327,7 +327,7 @@ def test_the_form_renders_and_a_complete_submission_is_recorded_against_the_vers
 
 
 def test_the_form_needs_a_signed_in_attendee_and_an_open_window(ada):
-    program = make_program("Gates")
+    program = make_program("Gates", require_evaluation_for_credit=True)
     create_standard_form(program)
     session = open_session(program)
     anonymous = Client().get(evaluate_url(session))
@@ -526,7 +526,7 @@ def test_the_server_rejects_a_completion_the_client_would_have_allowed(ada):
 def test_a_draft_survives_the_window_expiring_and_completes_in_a_reopened_one(ada, monkeypatch):
     from credits.windows import request_reopening
 
-    program = make_program("Drafts")
+    program = make_program("Drafts", require_evaluation_for_credit=True)
     create_standard_form(program)
     session = open_session(program)
     client = signed_in_client("ada@mcgill.ca")
@@ -572,7 +572,7 @@ def test_credit_appears_only_when_the_draft_is_complete(ada):
     from attendance.tests.factories import teams_row
     from credits.rules import credit_breakdown
 
-    program = make_program("Credit")
+    program = make_program("Credit", require_evaluation_for_credit=True)
     create_standard_form(program)
     session = open_session(program)
     teams_row(session.event, ada, session.start_at, session.end_at)

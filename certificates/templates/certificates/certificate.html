@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Certificate: {{ c.recipient_name }}</title>
+<style>
+  body { font-family: Georgia, serif; max-width: 48em; margin: 3em auto; color: #111; }
+  h1 { font-size: 1.8em; margin-bottom: 0.2em; }
+  .statement { margin-top: 2em; padding: 1em; border-top: 1px solid #999; font-size: 0.95em; }
+  table { border-collapse: collapse; width: 100%; margin-top: 1em; }
+  td, th { text-align: left; padding: 0.3em 0.6em; border-bottom: 1px solid #ddd; }
+  .code { font-family: monospace; color: #555; }
+</style>
+</head>
+<body>
+<h1>{{ c.institution_name }}</h1>
+<p>{{ c.program_name }}</p>
+<p>This certifies that <strong>{{ c.recipient_name }}{% if c.recipient_credential %}, {{ c.recipient_credential }}{% endif %}</strong>
+{% if c.licence_number %}(licence {{ c.licence_number }}{% if c.licence_jurisdiction %}, {{ c.licence_jurisdiction }}{% endif %}){% endif %}
+participated in the sessions listed below between {{ c.period_start|date:"j F Y" }} and {{ c.period_end|date:"j F Y" }}.</p>
+<p><strong>{{ c.attendance_credits }}</strong> attendance credits{% if c.teaching_credits %} and <strong>{{ c.teaching_credits }}</strong> teaching credits{% endif %}: <strong>{{ c.total_credits }}</strong> in all.</p>
+<table>
+  <thead><tr><th>Date</th><th>Rounds</th><th>Attendance</th><th>Teaching</th></tr></thead>
+  <tbody>
+  {% for line in lines %}
+  <tr><td>{{ line.event_date|date:"j M Y" }}</td><td>{{ line.event_title }}</td><td>{{ line.attendance_credits }}</td><td>{{ line.teaching_credits }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if statement %}<div class="statement">{{ statement|linebreaksbr }}</div>{% endif %}
+<p class="code">Issued {{ c.issued_at|date:"j F Y" }}. Verification code {{ c.verification_code }}.</p>
+</body>
+</html>

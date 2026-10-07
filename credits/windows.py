@@ -23,6 +23,7 @@ STATE_REOPENED = "reopened"  # a granted window is running
 STATE_CAN_REQUEST = "can_request"  # closed, and a reopening may be requested
 STATE_LIMIT_REACHED = "limit_reached"  # closed; no more self-service reopenings
 STATE_PAST_YEAR_END = "past_year_end"  # closed; the accreditation year has ended
+STATE_EVENT_CLOSED = "event_closed"  # no gate; the event is closed, so nothing changes any more
 
 
 class ReopeningRefused(Exception):
@@ -64,9 +65,22 @@ def open_reopening(person, session, at=None):
     )
 
 
+def gated(session):
+    from .rules import evaluation_required
+
+    return evaluation_required(session.event.program)
+
+
 def submission_allowed(person, session, at=None):
-    """May this person submit an evaluation of this session right now?"""
+    """
+    May this person submit (or change) an evaluation of this session right
+    now? With the gate off there is no deadline: a deadline only reduces
+    responses, so the form stays open and editable until the event is
+    closed. With the gate on, the window rules apply.
+    """
     at = at or timezone.now()
+    if not gated(session):
+        return not session.event.is_closed
     return default_window_open(session, at) or open_reopening(person, session, at) is not None
 
 
@@ -90,6 +104,10 @@ def request_reopening(person, session, *, reason="", user=None, override=False, 
     at = timezone.now()
     if override and user is None:
         raise ValueError("An override needs the staff user who made it.")
+    if not gated(session):
+        raise ReopeningRefused(
+            "Evaluations in this program have no deadline; the form is open until the event closes."
+        )
     if is_evaluated(person, session):
         raise ReopeningRefused("This session has already been evaluated.")
     if not override:
@@ -143,6 +161,8 @@ def window_state(person, session, at=None):
     at = at or timezone.now()
     if is_evaluated(person, session):
         return STATE_EVALUATED
+    if not gated(session):
+        return STATE_EVENT_CLOSED if session.event.is_closed else STATE_OPEN
     if default_window_open(session, at):
         return STATE_OPEN
     if open_reopening(person, session, at) is not None:

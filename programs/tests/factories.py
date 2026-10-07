@@ -18,8 +18,13 @@ def make_program(name=None, institution=None, **overrides):
     """
     institution = institution or make_institution()
     if name is None:
+        # The shared program has the evaluation gate ON: most of the suite was
+        # written against the gate and keeps testing it. The production
+        # default is off; tests of that path make a named program.
         program, _ = Program.objects.get_or_create(
-            institution=institution, slug="default", defaults={"name": "Default Program"}
+            institution=institution,
+            slug="default",
+            defaults={"name": "Default Program", "require_evaluation_for_credit": True},
         )
         if overrides:
             for key, value in overrides.items():

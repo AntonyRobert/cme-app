@@ -105,6 +105,40 @@ class Program(UUIDModel):
         help_text="Attendance sources further apart than this, for one person and session, "
         "are held back from bulk sign-off for a human to look at.",
     )
+    # Credit follows attendance alone unless a program turns the gate on.
+    # The Royal College standard requires offering the opportunity to
+    # evaluate, not enforcing completion.
+    require_evaluation_for_credit = models.BooleanField(
+        default=False,
+        help_text="When on, attendance credit for a session needs a complete evaluation of it, "
+        "and evaluation windows apply. Off by default: the standard requires the opportunity "
+        "to evaluate, not completion.",
+    )
+    accreditation_statement = models.TextField(
+        blank=True,
+        help_text="Printed on every certificate and on the flyer, naming the accredited CPD "
+        "provider. Exact wording from McGill CPD.",
+    )
+    activity_evaluation_form = models.ForeignKey(
+        "credits.EvaluationForm",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="+",
+        help_text="The overall-activity evaluation, offered per event. Blank means none is offered.",
+    )
+
+    class ActivityCadence(models.TextChoices):
+        PER_EVENT = "per_event", "Once per event"
+        ANNUAL = "annual", "Once per accreditation year"
+
+    activity_evaluation_cadence = models.CharField(
+        max_length=10,
+        choices=ActivityCadence.choices,
+        default=ActivityCadence.PER_EVENT,
+        help_text="How often the overall-activity evaluation is offered. Only per event is "
+        "built; whether CPD wants it annually is still open.",
+    )
     default_evaluation_form = models.ForeignKey(
         "credits.EvaluationForm",
         null=True,

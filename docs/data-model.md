@@ -83,6 +83,10 @@ are data, and so the public directory (`decisions.md`) has something to push.
 | coi_question_version | text | Which `COI_QUESTIONS` version new declarations use. Was `COI_CURRENT_VERSION` |
 | retention_years | smallint | How long records are kept after the accreditation year. Policy still open; the field is where the answer goes |
 | default_evaluation_form | FK EvaluationForm, nullable | The form a session uses unless its event or the session says otherwise. Most programs set it once |
+| require_evaluation_for_credit | bool | **Off by default.** When on, a session's attendance credit needs a complete evaluation of it and the window rules apply. Program level only: programs are the accredited unit, and two attendees at two events in one program must not face different rules |
+| activity_evaluation_form | FK EvaluationForm, nullable | The overall-activity evaluation, offered per event. Blank means none is offered |
+| activity_evaluation_cadence | enum | per_event, annual. Stored for the day CPD says which; only per event is built |
+| accreditation_statement | text | Names the accredited CPD provider. Printed on every certificate (snapshotted at issue) and, when built, the flyer. Wording from McGill CPD |
 | is_active | bool | A retired program keeps its history and takes no new events |
 
 Everything that used to be a per-deployment setting and differs between programs lives
@@ -759,7 +763,11 @@ number while leaving the record untouched is what makes an audit go badly.
 
 ## Evaluation and credits
 
-Credit needs two things: the person was there, and they completed the evaluation.
+Credit follows confirmed attendance. The opportunity to evaluate each session, and the
+activity as a whole, is offered; completing it is not a condition of credit unless the
+program turns `require_evaluation_for_credit` on (then the gate below and the window
+rules apply). The Royal College standard requires that the opportunity be offered, not
+that it be taken.
 
 ### EvaluationSubmission
 
@@ -767,7 +775,8 @@ Credit needs two things: the person was there, and they completed the evaluation
 | --- | --- | --- |
 | id | UUID pk | |
 | person | FK Person | From the signed-in session, never typed |
-| session | FK Session | One submission per lecture attended |
+| session | FK Session, nullable | One submission per lecture attended. Null for an overall-activity evaluation |
+| event | FK RoundsEvent, nullable | Set, with session null, for the overall-activity evaluation: one per person per event. Exactly one of session and event (check constraint) |
 | submitted_at | timestamptz | |
 | self_reported_session_minutes | smallint, nullable | How long they say they attended this lecture. Blank on a draft |
 | attestation | bool | They confirm the minutes are accurate. False on a draft; part of what makes a submission complete |
@@ -781,8 +790,12 @@ draft earns nothing: the credit gate is `is_complete`, unchanged. A draft surviv
 window expiring, but completing it needs an open or reopened window: the draft is not
 the claim, the completed submission is.
 
-Unique on `(person, session)`. A submission is accepted only while a window is open for
-that person and session (below). Saving a complete submission closes any reopened window.
+Unique on `(person, session)` and on `(person, event)` for activity evaluations. With
+the program's gate on, a session submission is accepted only while a window is open for
+that person and session (below), and saving a complete one closes any reopened window.
+With the gate off there is no window: the form stays open, and editable, until the event
+is closed. An activity evaluation never gates credit, has no attendance claim, and is
+open until the event is closed; `per_objective` questions on its form expand to nothing.
 
 ### EvaluationWindow
 
@@ -927,7 +940,8 @@ Everyone in a Teams export is an attendee for credit purposes.
 Each rule lives in its own function:
 
 ```
-evaluation_gate(person, session)       -> bool     # a complete evaluation of THAT session
+evaluation_required(program)           -> bool     # the program's gate switch; off by default
+evaluation_gate(person, session)       -> bool     # a complete evaluation of THAT session; consulted only when required
 creditable_time(person, event)         -> per session: proposed and confirmed minutes,
                                           sources, attended, evaluated, presented,
                                           review reasons
@@ -996,6 +1010,7 @@ because someone will file it with a college.
 | recipient_credential | text | Snapshotted |
 | licence_number, licence_jurisdiction | text | Snapshotted, **as entered**, never the normalized form |
 | verification_code | text, unique, indexed | Prints on the PDF |
+| accreditation_statement | text | Snapshotted from the program at issue; printed on the certificate |
 | template_version | text | Which layout and wording was used |
 | pdf_path | text | Where the PDF is, relative to `UPLOAD_ROOT`. A hash with no recorded path is half a control |
 | pdf_sha256 | text | Proves the file wasn't altered after issue |

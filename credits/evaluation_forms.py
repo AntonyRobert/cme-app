@@ -166,9 +166,21 @@ class RenderedQuestion:
         return []
 
 
+def resolve_activity_form(program):
+    """The overall-activity form: program level only, active, with a version."""
+    form = program.activity_evaluation_form
+    if form is not None and form.is_active and form.current_version is not None:
+        return Resolution(form=form, level=LEVEL_PROGRAM)
+    return Resolution(form=None, level=None, skipped=((LEVEL_PROGRAM, form),) if form else ())
+
+
 def rendered_questions(version, session):
-    """The version's questions in order, per_objective expanded for this session."""
-    objectives = list(session.objectives.order_by("position"))
+    """
+    The version's questions in order, per_objective expanded for this
+    session. For an activity evaluation `session` is None and per_objective
+    questions expand to nothing: there are no objectives at that level.
+    """
+    objectives = list(session.objectives.order_by("position")) if session is not None else []
     out = []
     for question in version.questions.order_by("position"):
         if question.kind == Kind.PER_OBJECTIVE:
@@ -226,10 +238,11 @@ def remaining(submission):
         response = response_for(rendered, responses)
         if response is None or not response.answered:
             missing.append(rendered)
-    if submission.self_reported_session_minutes is None:
-        missing.append("minutes")
-    if not submission.attestation:
-        missing.append("attestation")
+    if submission.session_id:  # the attendance claim belongs to a session evaluation only
+        if submission.self_reported_session_minutes is None:
+            missing.append("minutes")
+        if not submission.attestation:
+            missing.append("attestation")
     return missing
 
 

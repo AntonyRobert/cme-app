@@ -14,6 +14,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from core.authz import public_object
 from credits.windows import (
+    STATE_EVENT_CLOSED,
     STATE_CAN_REQUEST,
     STATE_OPEN,
     STATE_REOPENED,
@@ -158,20 +159,32 @@ def me(request):
         s.session_id: len(remaining(s))
         for s in EvaluationSubmission.objects.filter(person=request.person, is_complete=False)
     }
+    from credits.activity import activities_to_evaluate
+    from credits.rules import evaluation_required
+
     programs = person_standing_by_program(request.person)
-    to_evaluate = []
+    gated, invited = [], []  # (event, session, state): the gate's list, and the invitation
     for program in programs:
+        required = evaluation_required(program.program)
         for standing in program.standings:
             for session, state in sessions_needing_evaluation(request.person, standing.event):
-                to_evaluate.append((standing.event, session, state))
+                (gated if required else invited).append((standing.event, session, state))
+    activity_drafts = {
+        s.event_id: len(remaining(s))
+        for s in EvaluationSubmission.objects.filter(person=request.person, is_complete=False, session__isnull=True)
+    }
     return render(
         request,
         "signin/me.html",
         {
             "person": request.person,
             "drafts": drafts,
+            "activity_drafts": activity_drafts,
             "programs": programs,
-            "to_evaluate": to_evaluate,
+            "to_evaluate": gated,
+            "invited": invited,
+            "activities": activities_to_evaluate(request.person),
+            "STATE_EVENT_CLOSED": STATE_EVENT_CLOSED,
             "STATE_OPEN": STATE_OPEN,
             "STATE_REOPENED": STATE_REOPENED,
             "STATE_CAN_REQUEST": STATE_CAN_REQUEST,

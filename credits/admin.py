@@ -66,11 +66,12 @@ class EvaluationSubmissionAdmin(ProgramScopedAdminMixin, BaseAdmin):
     date_hierarchy = "session__event__date"
     search_fields = ["person__family_name", "person__given_name", "session__title"]
     list_select_related = ["person", "session__event"]
-    autocomplete_fields = ["person", "session"]
+    autocomplete_fields = ["person", "session", "event"]
     inlines = [EvaluationResponseInline]
     fields = [
         "person",
         "session",
+        "event",
         "form_version",
         "submitted_at",
         "self_reported_session_minutes",
@@ -108,9 +109,9 @@ class EvaluationSubmissionAdmin(ProgramScopedAdminMixin, BaseAdmin):
 
     def save_model(self, request, obj, form, change):
         if not change and obj.form_version_id is None:
-            from .evaluation_forms import resolve_form
+            from .evaluation_forms import resolve_activity_form, resolve_form
 
-            resolution = resolve_form(obj.session)
+            resolution = resolve_form(obj.session) if obj.session_id else resolve_activity_form(obj.event.program)
             if resolution.version is None:
                 raise ValidationError("No active evaluation form resolves for this session.")
             obj.form_version = resolution.version

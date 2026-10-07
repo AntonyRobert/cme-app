@@ -82,6 +82,10 @@ class Certificate(FrozenFieldsMixin, UUIDModel):
     verification_code = models.CharField(
         max_length=20, unique=True, default=generate_verification_code
     )
+    accreditation_statement = models.TextField(
+        blank=True,
+        help_text="Snapshotted from the program when issued: names the accredited CPD provider.",
+    )
     template_version = models.CharField(max_length=50)
     pdf_path = models.CharField(
         max_length=500, blank=True, help_text="Relative to UPLOAD_ROOT. The artefact of record."

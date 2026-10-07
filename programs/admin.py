@@ -92,6 +92,10 @@ class ProgramAdmin(NoDeleteMixin, BaseAdmin):
                     "coi_question_version",
                     "retention_years",
                     "default_evaluation_form",
+                    "require_evaluation_for_credit",
+                    "activity_evaluation_form",
+                    "activity_evaluation_cadence",
+                    "accreditation_statement",
                 ]
             },
         ),

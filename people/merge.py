@@ -80,6 +80,9 @@ CONDITIONAL_UNIQUE = {
     # One scan per person per session. Two merged records that both scanned
     # the same session are a collision a human resolves, like two evaluations.
     "attendancerecord_one_qr_scan_per_session": {"source": "qr_signin"},
+    # One overall-activity evaluation per person per event: two merged records
+    # that both evaluated the same event are a collision a human resolves.
+    "evaluationsubmission_one_activity_per_event": {"session__isnull": True},
 }
 
 

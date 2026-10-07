@@ -57,13 +57,40 @@ sessions, not the event: time in the Teams room during a break is not educationa
 activity. A talk that runs over is fixed once, on its end time. The event's own
 `actual_start_at` / `actual_end_at` fields were removed; they had no job left.
 
-**Credit is earned per session and gated per session.**
+**Credit follows attendance; the evaluation gate is off by default, per program.**
+The Royal College standard requires that participants be offered the opportunity to
+evaluate each session and the overall activity, not that they complete it. So confirmed
+attendance minutes earn credit on their own, and `Program.require_evaluation_for_credit`
+(default false) is where a program that wants the stricter rule turns it on: then
+`evaluation_gate` and the window rules below apply unchanged. Program level only, never
+per event: programs are the accredited unit, and two attendees at two events in one
+program must not face different rules. On the credits page an unevaluated session is an
+invitation ("Help us improve"), never a warning; with the gate on the stronger wording
+returns.
+
+**When the gate is on, credit is earned per session and gated per session.**
 Qualifying minutes per session, counted only when that session has a complete
 evaluation, summed per event. The earlier event-level gate ("any one complete
 evaluation") would have let someone evaluate one talk and claim credit for three. The
 stricter candidate from the earlier open question is now buildable, because sessions have
 times, and this is it. `accredited_credits` stays a field so an accrediting body can
 approve fewer credits than the clock says.
+
+**Evaluation windows apply only when the gate is on.** With no gate, a deadline only
+reduces responses, so submissions stay open, and editable, until the event is closed.
+`EvaluationWindow` and its rules are kept intact and bypassed; turning the gate on
+brings them back as they were.
+
+**The overall activity is evaluated per event, from a program-level form.** The standard
+asks for an opportunity to evaluate the activity as a whole, not only each session.
+`Program.activity_evaluation_form` is offered to everyone who attended an event, until
+the event closes; it never gates credit. Whether CPD wants this per event or once a
+year is open, so `activity_evaluation_cadence` is stored and only per event is built.
+
+**Every certificate carries the program's accreditation statement.** Approved activities
+must name the accredited CPD provider on all materials; `Program.accreditation_statement`
+holds the wording McGill CPD supplies, snapshotted onto each certificate at issue and,
+when the flyer is built, printed there too.
 
 **Certificates print the exact sum, to two decimals. No rounding at issue, anywhere.**
 Rounding the year's total to a whole credit was decided and reversed: someone with 2.40

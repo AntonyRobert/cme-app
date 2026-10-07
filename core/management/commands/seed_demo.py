@@ -208,8 +208,14 @@ class Command(BaseCommand):
         mcgill, _ = Institution.objects.get_or_create(
             short_name="mcgill", defaults={"name": "McGill University"}
         )
+        # The demo program keeps the evaluation gate ON so the seed shows the
+        # fuller story (windows, reopenings, credit waiting on a form). The
+        # other two programs carry the production default: credit follows
+        # attendance alone.
         self.program, _ = Program.objects.get_or_create(
-            institution=mcgill, slug="em", defaults={"name": "Emergency Medicine"}
+            institution=mcgill,
+            slug="em",
+            defaults={"name": "Emergency Medicine", "require_evaluation_for_credit": True},
         )
         for name, slug in (("Internal Medicine", "im"), ("General Surgery", "gs")):
             Program.objects.get_or_create(institution=mcgill, slug=slug, defaults={"name": name})

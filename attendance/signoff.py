@@ -414,7 +414,9 @@ def last_signed_at(event):
 
 def signoff_status(event):
     from credits.models import EvaluationSubmission
+    from credits.rules import evaluation_required
 
+    gated = evaluation_required(event.program)
     evaluated = set(
         EvaluationSubmission.objects.filter(session__event=event, is_complete=True).values_list(
             "person", "session"
@@ -433,7 +435,7 @@ def signoff_status(event):
                     status.stale += 1
             else:
                 undecided.append((person_review.person, s))
-                if (person_review.person.pk, s.session.pk) in evaluated:
+                if not gated or (person_review.person.pk, s.session.pk) in evaluated:
                     status.blocking += 1
     if status.last_signed_at and undecided:
         def rows_of(s):
