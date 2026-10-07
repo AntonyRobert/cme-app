@@ -81,6 +81,15 @@ listed). Nothing pushed.
   such). `/scan/<session>/<window>/<token>/` is the public route (marked, with the reason,
   so the URL walk passes). The room page is on the event admin: full screen, inline SVG,
   meta refresh every thirty seconds, picks the running session. Fifteen tests.
+- **Your three closing items.** (1) The pending scan is bound to one browser session:
+  database-backed session, HttpOnly cookie, key rotated at sign-in, flushed at sign-out,
+  consumed on first completion; six tests cover the copied `next` URL, the magic link
+  opened on another device, the pre-sign-in cookie, sign-out, and a double completion
+  (the unique index decides; `record_scan` now catches that race instead of 500ing).
+  (2) The event list has a "Sign-off" column and filter with the state "needs another
+  look": signed off, then rows arrived after the last sign-off or a proposal moved.
+  (3) The room page stamps the server time and warns in red past five seconds of drift;
+  the token window is unchanged.
 - **"Import paper sign-in sheet"** on the event page. Lists the program's known people
   (anyone who attended, evaluated or presented at one of its events) with a checkbox per
   session, five blank lines for names not on the list, and a Record button. A tick is a
@@ -116,6 +125,15 @@ listed). Nothing pushed.
   event being edited, falling back to the first program the staff member has a role in.
 - **`Program.retention_years`** is stored and editable, default 7. No deletion or
   anonymization logic, per your note; still open in decisions.md.
+- **A late evaluation does not by itself reopen a signed-off event.** Your February
+  scenario: `confirm_event` decides every person-session that has attendance rows,
+  evaluated or not, so January's decision already covers February's evaluation and the
+  blocker list stays empty. What does add unsigned minutes to a signed-off event is rows
+  arriving later (a late match from the queue, a sheet typed in afterwards, another
+  upload) or a correction superseding a row under a decision; that is what the new
+  state shows. "New" is decided by comparing row `created_at` with the last sign-off
+  (the later of the last bulk pass in the audit log and the last decision), so held rows
+  from the last pass read as "in progress", not as news.
 - **A scan made while signed out is remembered for twenty minutes and written after
   sign-in.** The code lives a minute; the magic-link round trip takes longer. The token
   is verified at scan time; the completion only has to come soon after. The remembered
@@ -170,10 +188,12 @@ listed). Nothing pushed.
 - A walk-in has to be matched in the queue before the event can be signed off, like any
   unmatched row. Five blank lines is a guess at how many a sheet has; the page can be
   submitted twice.
-- The room page needs the server's clock and the phones' clocks within about thirty
-  seconds of each other; both are NTP-synced in practice, but a laptop with a drifted
-  clock would show codes the server calls expired. The page says "scan the code showing
-  now", which is the right instruction either way.
+- The room page now warns about its own clock; the phones' clocks do not matter (the
+  phone only follows a URL). The warning is a few lines of inline script on a staff
+  page, the first JavaScript in the project; it degrades to nothing without it.
+- The sign-off column runs `review()` per event on the changelist, and the filter runs
+  it for every event in the list before filtering. Fine at a fortnightly series (a few
+  dozen events a year); it would want caching before a program with hundreds.
 - The scan page is the first attendee-facing page that does something at scan time on a
   phone, and `base.html` has only the design tokens. It works; it is not styled beyond
   that.

@@ -283,3 +283,130 @@ def test_what_the_room_page_encodes_can_be_scanned(ada, settings):
     assert re.search(r"<svg[^>]*>", html)
     done = ada_client(ada).get(path)
     assert "You are signed in" in done.content.decode()
+
+
+# --- The pending scan cannot be transferred ----------------------------------------
+
+
+def test_the_pending_scan_lives_server_side_behind_an_httponly_cookie(settings):
+    """
+    Between scan and sign-in the browser holds an unredeemed claim. It is a
+    row in the server-side session store; the cookie is an opaque key, and
+    nothing in a URL names the scan.
+    """
+    event = event_now()
+    session = event.sessions.order_by("position").first()
+    client = Client()
+    response = client.get(qr.scan_path(session))
+
+    assert settings.SESSION_ENGINE == "django.contrib.sessions.backends.db"
+    assert settings.SESSION_COOKIE_HTTPONLY is True
+    cookie = client.cookies[settings.SESSION_COOKIE_NAME]
+    assert str(session.pk) not in cookie.value and qr.PENDING_KEY not in cookie.value
+    assert str(session.pk) not in response.url  # the next URL carries nothing
+
+
+def test_the_next_url_alone_completes_nothing_in_another_browser(ada):
+    """A copied /scan/done/ link is a photographed code with extra steps; it must do nothing."""
+    event = event_now()
+    session = event.sessions.order_by("position").first()
+    scanner = Client()
+    scanner.get(qr.scan_path(session))
+
+    other = ada_client(ada)  # Ada, signed in on another device, never scanned
+    response = other.get(reverse("attendance:scan_complete"))
+
+    assert response.status_code == 302 and response.url == reverse("signin:me")
+    assert not AttendanceRecord.objects.filter(source="qr_signin").exists()
+    assert qr.PENDING_KEY in scanner.session  # the scanning browser still holds its own
+
+
+def test_the_magic_link_opened_elsewhere_does_not_carry_the_scan(ada):
+    """Scan on the phone, open the email on the laptop: the laptop signs in, the scan stays on the phone."""
+    event = event_now()
+    session = event.sessions.order_by("position").first()
+    phone = Client()
+    phone.get(qr.scan_path(session), follow=True)
+    ask_for_link(phone, "ada@mcgill.ca")
+
+    laptop = Client()
+    landed = laptop.get(reverse("signin:redeem", args=[last_link_token()]))
+
+    assert landed.status_code == 302 and landed.url == reverse("signin:me")
+    assert not AttendanceRecord.objects.filter(source="qr_signin").exists()
+    assert qr.PENDING_KEY in phone.session
+    assert phone.get(reverse("attendance:scan_complete")).url.startswith(reverse("signin:start"))
+
+
+def test_the_cookie_from_before_sign_in_is_dead_afterwards(ada, settings):
+    """Sign-in rotates the session key, so a cookie copied while the scan was pending opens nothing."""
+    event = event_now()
+    session = event.sessions.order_by("position").first()
+    client = Client()
+    client.get(qr.scan_path(session), follow=True)
+    copied = client.cookies[settings.SESSION_COOKIE_NAME].value
+    ask_for_link(client, "ada@mcgill.ca")
+    client.get(reverse("signin:redeem", args=[last_link_token()]), follow=True)
+    assert client.cookies[settings.SESSION_COOKIE_NAME].value != copied
+
+    thief = Client()
+    thief.cookies[settings.SESSION_COOKIE_NAME] = copied
+    response = thief.get(reverse("attendance:scan_complete"))
+
+    assert response.status_code == 302 and response.url.startswith(reverse("signin:start"))
+    assert AttendanceRecord.objects.filter(source="qr_signin").count() == 1  # Ada's own, from the real browser
+
+
+def test_signing_out_discards_a_pending_scan(ada):
+    event = event_now()
+    session = event.sessions.order_by("position").first()
+    client = Client()
+    client.get(qr.scan_path(session))
+    client.get(reverse("signin:start"))  # wandered to the sign-in page by hand: next is dropped
+    ask_for_link(client, "ada@mcgill.ca")
+    assert client.get(reverse("signin:redeem", args=[last_link_token()])).url == reverse("signin:me")
+    assert qr.PENDING_KEY in client.session  # still hers to finish
+
+    client.post(reverse("signin:signout"))
+
+    assert qr.PENDING_KEY not in client.session
+    ask_for_link(client, "ada@mcgill.ca")
+    client.get(reverse("signin:redeem", args=[last_link_token()]))
+    assert client.get(reverse("attendance:scan_complete")).url == reverse("signin:me")
+    assert not AttendanceRecord.objects.filter(source="qr_signin").exists()
+
+
+def test_two_completions_of_one_scan_leave_one_row(ada):
+    """A double tap races two completions; the unique index keeps one row and nobody sees an error."""
+    event = event_now()
+    session = event.sessions.order_by("position").first()
+    first, created = qr.record_scan(session, ada)
+    assert created
+    # Simulate the second request having passed the existence check before the first saved.
+    from unittest import mock
+
+    with mock.patch.object(AttendanceRecord.objects, "active") as active:
+        active.return_value.filter.return_value.first.side_effect = [None, first]
+        row, created = qr.record_scan(session, ada)
+    assert (row, created) == (first, False)
+    assert AttendanceRecord.objects.filter(source="qr_signin").count() == 1
+
+
+def test_the_room_page_carries_the_server_clock_for_the_drift_warning():
+    """
+    A laptop with a drifted clock would show codes the server calls expired.
+    The page compares its clock with the server's stamp and warns past a few
+    seconds; the token window itself is not widened.
+    """
+    import re
+
+    event = event_now()
+    before = timezone.now().timestamp() * 1000
+    html = staff_client(event.program).get(qr_url(event)).content.decode()
+    after = timezone.now().timestamp() * 1000
+
+    stamp = int(re.search(r'data-server-time="(\d+)"', html).group(1))
+    assert before - 1000 <= stamp <= after + 1000
+    assert f'data-clock-tolerance="{qr.CLOCK_TOLERANCE_SECONDS}"' in html
+    assert "This display's clock is wrong" in html
+    assert qr.CLOCK_TOLERANCE_SECONDS == 5 and qr.WINDOW_SECONDS == 30  # the control stays tight

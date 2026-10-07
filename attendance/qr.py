@@ -15,6 +15,7 @@ token; the completion only has to happen soon after.
 import datetime
 
 from django.conf import settings
+from django.db import IntegrityError, transaction
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare, salted_hmac
@@ -25,6 +26,9 @@ from rounds.models import Session
 from .models import AttendanceRecord
 
 WINDOW_SECONDS = 30
+# The room page warns when the laptop's clock is further than this from the
+# server's. Not a wider token window: that would weaken the control.
+CLOCK_TOLERANCE_SECONDS = 5
 # A scan is accepted from a little before the session until a little after.
 SCAN_GRACE = datetime.timedelta(minutes=15)
 # How long a valid scan waits for the attendee to finish signing in.
@@ -123,11 +127,14 @@ def record_scan(session, person, *, scanned_at=None, request=None):
     none. Returns (row, created). The row carries no staff created_by: the
     attendee is the actor, and the audit entry says so.
     """
-    existing = (
-        AttendanceRecord.objects.active()
-        .filter(session=session, person=person, source=AttendanceRecord.Source.QR_SIGNIN)
-        .first()
-    )
+    def existing_row():
+        return (
+            AttendanceRecord.objects.active()
+            .filter(session=session, person=person, source=AttendanceRecord.Source.QR_SIGNIN)
+            .first()
+        )
+
+    existing = existing_row()
     if existing is not None:
         return existing, False
     row = AttendanceRecord(
@@ -138,8 +145,19 @@ def record_scan(session, person, *, scanned_at=None, request=None):
         match_method=AttendanceRecord.MatchMethod.SELF,
         created_by=None,
     )
-    row.full_clean()
-    row.save()
+    # Field validation here; the one-scan-per-session rule is left to the
+    # unique index, which is the only thing that holds under a race.
+    row.full_clean(validate_constraints=False)
+    try:
+        with transaction.atomic():
+            row.save()
+    except IntegrityError:
+        # Two completions of the same scan raced (a double tap on the sign-in
+        # link); the index kept one row, and that one is the answer.
+        existing = existing_row()
+        if existing is None:
+            raise
+        return existing, False
     record(
         "attendance.qr_scanned",
         row,

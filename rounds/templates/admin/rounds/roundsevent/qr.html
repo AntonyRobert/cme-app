@@ -16,9 +16,29 @@
     .muted { color: #666; font-size: 1rem; }
     .nav { position: fixed; top: 8px; left: 8px; font-size: 0.9rem; }
     .nav a { margin-right: 1em; }
+    #clock-warning { display: none; position: fixed; top: 0; left: 0; right: 0; padding: 0.8em;
+                     background: #ba2121; color: #fff; font-size: 1.4rem; font-weight: bold; }
   </style>
 </head>
-<body>
+<body data-server-time="{{ server_time_ms }}" data-clock-tolerance="{{ clock_tolerance_seconds }}">
+  <div id="clock-warning">This display's clock is wrong: it differs from the server by
+    <span id="clock-drift"></span> seconds. Codes it shows may be refused. Fix the laptop's clock.</div>
+  <script>
+    // The code is valid for a minute of SERVER time. A laptop whose clock
+    // drifts shows codes the server has already expired, and the scans fail
+    // without saying why; say so here instead. The page reloads every window,
+    // so the comparison is fresh each time.
+    (function () {
+      var body = document.body;
+      var server = Number(body.getAttribute("data-server-time"));
+      var tolerance = Number(body.getAttribute("data-clock-tolerance"));
+      var drift = Math.round((Date.now() - server) / 1000);
+      if (Math.abs(drift) > tolerance) {
+        document.getElementById("clock-drift").textContent = (drift > 0 ? "+" : "") + drift;
+        document.getElementById("clock-warning").style.display = "block";
+      }
+    })();
+  </script>
   <div class="nav">
     <a href="{{ back_url }}">&larr; {{ event }}</a>
     {% for s in sessions %}<a href="?session={{ s.pk }}"{% if s.pk == session.pk %} style="font-weight:bold"{% endif %}>{{ s.position }}</a>{% endfor %}

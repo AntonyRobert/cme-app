@@ -344,3 +344,107 @@ def unconfirmed_sessions(person, event):
     decided = set(confirmed_minutes(person, event))
     recorded = attended_minutes(person, event)
     return [s.session for s in recorded.sessions if s.sources and s.session.pk not in decided]
+
+
+# --- Where an event stands, for the event list -----------------------------------------
+
+STATE_NONE = "no attendance"
+STATE_NOT_STARTED = "not started"
+STATE_IN_PROGRESS = "in progress"
+STATE_SIGNED_OFF = "signed off"
+STATE_NEEDS_ANOTHER_LOOK = "needs another look"
+
+
+@dataclass
+class SignoffStatus:
+    """
+    Counts of person-sessions with recorded minutes (presenters' own talks
+    excluded): decided; undecided; of the undecided, those whose rows arrived
+    after the last sign-off (new) and those evaluated, so blocking a
+    certificate right now; and decided-but-the-proposal-moved (stale).
+    """
+
+    total: int = 0
+    decided: int = 0
+    new: int = 0
+    stale: int = 0
+    blocking: int = 0
+    last_signed_at: object = None
+
+    @property
+    def undecided(self):
+        return self.total - self.decided
+
+    @property
+    def state(self):
+        if not self.total:
+            return STATE_NONE
+        if not self.decided:
+            return STATE_NOT_STARTED
+        if self.new or self.stale:
+            # Signed off, then rows arrived (a late match, a sheet typed in
+            # afterwards, a later upload) or a correction moved a proposal.
+            return STATE_NEEDS_ANOTHER_LOOK
+        if self.undecided:
+            return STATE_IN_PROGRESS  # the held rows from the last pass, being worked
+        return STATE_SIGNED_OFF
+
+    @property
+    def needs_attention(self):
+        return self.state in (STATE_NOT_STARTED, STATE_IN_PROGRESS, STATE_NEEDS_ANOTHER_LOOK)
+
+
+def last_signed_at(event):
+    """When this event was last signed off: the later of the last bulk pass and the last decision."""
+    from audit.models import AuditLog
+
+    moments = [
+        AuditLog.objects.filter(action="attendance.event_confirmed", object_id=str(event.pk))
+        .order_by("-created_at")
+        .values_list("created_at", flat=True)
+        .first(),
+        SessionAttendanceDecision.objects.filter(session__event=event)
+        .order_by("-confirmed_at")
+        .values_list("confirmed_at", flat=True)
+        .first(),
+    ]
+    moments = [m for m in moments if m is not None]
+    return max(moments) if moments else None
+
+
+def signoff_status(event):
+    from credits.models import EvaluationSubmission
+
+    evaluated = set(
+        EvaluationSubmission.objects.filter(session__event=event, is_complete=True).values_list(
+            "person", "session"
+        )
+    )
+    status = SignoffStatus(last_signed_at=last_signed_at(event))
+    undecided = []  # (person, SessionReview)
+    for person_review in review(event):
+        for s in person_review.sessions:
+            if s.presented or not s.attendance.sources:
+                continue
+            status.total += 1
+            if s.is_confirmed:
+                status.decided += 1
+                if s.stale:
+                    status.stale += 1
+            else:
+                undecided.append((person_review.person, s))
+                if (person_review.person.pk, s.session.pk) in evaluated:
+                    status.blocking += 1
+    if status.last_signed_at and undecided:
+        def rows_of(s):
+            return [rid for ids in s.attendance.row_ids.values() for rid in ids]
+
+        row_ids = {rid for _, s in undecided for rid in rows_of(s)}
+        created = {
+            str(pk): at
+            for pk, at in AttendanceRecord.objects.filter(pk__in=row_ids).values_list("pk", "created_at")
+        }
+        for _, s in undecided:
+            if any(created.get(rid) and created[rid] > status.last_signed_at for rid in rows_of(s)):
+                status.new += 1
+    return status

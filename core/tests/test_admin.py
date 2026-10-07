@@ -1055,3 +1055,34 @@ def test_person_page_lists_what_blocks_a_certificate_with_links(client, boss, se
     confirm_event(event, user=boss)
     page = client.get(url(Person, "change", camille.pk)).content.decode()
     assert "nothing. A certificate can be issued" in page
+
+
+def test_event_list_shows_an_event_signed_off_then_changed_and_can_filter_to_it(client, boss, seeded):
+    from attendance.models import AttendanceRecord
+    from attendance.signoff import confirm_event
+
+    event = fixture_event()
+    camille = Person.objects.create(given_name="Camille", family_name="Thibault")
+    PersonEmail.objects.create(person=camille, email="camille.thibault@mcgill.ca")
+    import_fixture(client, event)
+    clear_queue(event, boss)
+    confirm_event(event, user=boss)
+    page = client.get(url(RoundsEvent, "changelist")).content.decode()
+    assert "signed off (" in page
+
+    # A tick typed in from the paper sheet a week later, for someone Teams never saw.
+    grace = Person.objects.create(given_name="Grace", family_name="Hopper")
+    AttendanceRecord.objects.create(
+        event=event, session=event.sessions.order_by("position").first(), person=grace,
+        source="signin_sheet", created_by=boss, match_method="manual",
+    )
+    page = client.get(url(RoundsEvent, "changelist")).content.decode()
+    assert "needs another look: 1 arrived since" in page
+    assert f'href="{signoff_url(event)}"' in page
+
+    filtered = client.get(url(RoundsEvent, "changelist") + "?signoff=needs+another+look")
+    assert list(filtered.context["cl"].result_list) == [event]
+    attention = client.get(url(RoundsEvent, "changelist") + "?signoff=attention")
+    assert event in attention.context["cl"].result_list
+    done = client.get(url(RoundsEvent, "changelist") + "?signoff=signed+off")
+    assert event not in done.context["cl"].result_list

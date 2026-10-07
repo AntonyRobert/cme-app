@@ -394,3 +394,55 @@ def test_the_permission_belongs_to_the_program_admin_group_only():
     assert "attendance.sign_off_attendance" in perms[PROGRAM_ADMIN]
     assert "attendance.sign_off_attendance" not in perms[COORDINATOR]
     assert "attendance.sign_off_attendance" not in perms[READ_ONLY]
+
+
+# --- Where an event stands, for the event list -------------------------------------
+
+
+def test_status_tells_held_rows_from_rows_that_arrived_after_sign_off(event, person, staff):
+    from attendance.signoff import (
+        STATE_IN_PROGRESS,
+        STATE_NEEDS_ANOTHER_LOOK,
+        STATE_NONE,
+        STATE_NOT_STARTED,
+        STATE_SIGNED_OFF,
+        signoff_status,
+    )
+
+    first, second, third = talks(event)
+    assert signoff_status(event).state == STATE_NONE
+
+    teams_row(event, person, 0, 60)  # first: clean
+    teams_row(event, person, 60, 90)  # second: Teams says 30
+    tick(event, person, second)  # the sheet says 60: held as a disagreement
+    assert signoff_status(event).state == STATE_NOT_STARTED
+
+    confirm_event(event, user=staff)
+    status = signoff_status(event)
+    assert (status.total, status.decided, status.undecided, status.new) == (2, 1, 1, 0)
+    assert status.state == STATE_IN_PROGRESS  # the held row is being worked, nothing new
+
+    confirm_person(event, person, {second.pk: 60}, user=staff)
+    assert signoff_status(event).state == STATE_SIGNED_OFF
+
+    # A sheet typed in a week later: rows arrived after the last sign-off.
+    tick(event, person, third)
+    status = signoff_status(event)
+    assert (status.undecided, status.new, status.state) == (1, 1, STATE_NEEDS_ANOTHER_LOOK)
+    assert status.blocking == 0  # not evaluated: earns nothing, blocks nothing
+    evaluate(person, third)
+    assert signoff_status(event).blocking == 1
+
+
+def test_status_notices_a_proposal_that_moved_under_a_decision(event, person, staff):
+    from attendance.signoff import STATE_NEEDS_ANOTHER_LOOK, signoff_status
+    from attendance.services import supersede_rows
+
+    first, _, _ = talks(event)
+    row = teams_row(event, person, 0, 60)
+    confirm_event(event, user=staff)
+    correction = manual_row(event, person, start=0, end=30, reason="Left at half past, per the chair")
+    supersede_rows([row], correction, user=staff)
+
+    status = signoff_status(event)
+    assert (status.decided, status.stale, status.state) == (1, 1, STATE_NEEDS_ANOTHER_LOOK)

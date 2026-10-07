@@ -577,6 +577,22 @@ How it runs (`attendance/qr.py`, `attendance/views.py`):
   on return (`/scan/done/`) the remembered scan is written. The token was checked at scan
   time; the email round trip only has to finish within the twenty minutes. A `next` that
   points off the site is dropped.
+- **The pending scan cannot be transferred.** It is a row in the server-side session
+  store (database sessions), reached only through the HttpOnly session cookie; nothing in
+  any URL names it, the key rotates at sign-in so a cookie copied beforehand is dead, and
+  sign-out flushes it. It is consumed on first completion; two completions racing in the
+  same browser leave one row (the unique index decides). Tested from each angle.
+- **Clock drift is shown, not tolerated.** The room page stamps the server time into the
+  page and warns in red when the laptop's clock is more than five seconds off; the token
+  window stays at thirty seconds.
+
+**Where an event stands** (`signoff_status`, shown on the event list with a filter):
+*not started*, *in progress* (held rows from the last pass still being worked), *signed
+off*, or *needs another look*: signed off, then attendance rows arrived after the last
+sign-off (a late match, a sheet typed in afterwards, a later upload) or a correction
+moved a proposal under a decision. The count of rows blocking a certificate right now
+(undecided and evaluated) is shown with it. A late evaluation on its own does not reopen
+an event: decisions cover every person-session with rows, evaluated or not.
 
 ### Upload preview: nothing is stored until confirmed
 

@@ -9,6 +9,7 @@ from django.urls import path, reverse
 from django.db.models import Count, Q
 from django.utils import timezone
 from django.utils.html import format_html, format_html_join
+from django.utils.safestring import mark_safe
 
 from audit.log import record
 from core.admin import (
@@ -75,6 +76,39 @@ class SessionInline(admin.TabularInline):
         return 0 if obj else 3
 
 
+class SignoffFilter(admin.SimpleListFilter):
+    """Find the events a program admin owes a look, without opening each one."""
+
+    title = "sign-off"
+    parameter_name = "signoff"
+
+    def lookups(self, request, model_admin):
+        from attendance import signoff
+
+        return [
+            ("attention", "Needs attention (any)"),
+            (signoff.STATE_NEEDS_ANOTHER_LOOK, "Signed off, then changed"),
+            (signoff.STATE_NOT_STARTED, "Not started"),
+            (signoff.STATE_IN_PROGRESS, "In progress"),
+            (signoff.STATE_SIGNED_OFF, "Signed off"),
+        ]
+
+    def queryset(self, request, queryset):
+        from attendance.signoff import signoff_status
+
+        wanted = self.value()
+        if not wanted:
+            return queryset
+        keep = []
+        for event in queryset:
+            status = signoff_status(event)
+            if wanted == "attention" and status.needs_attention:
+                keep.append(event.pk)
+            elif status.state == wanted:
+                keep.append(event.pk)
+        return queryset.filter(pk__in=keep)
+
+
 @admin.register(RoundsEvent)
 class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
     list_display = [
@@ -88,7 +122,7 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
         "unmatched_rows",
         "signoff_state",
     ]
-    list_filter = ["program", "status"]
+    list_filter = ["program", "status", SignoffFilter]
     date_hierarchy = "date"
     search_fields = ["title", "teams_meeting_title", "sessions__title"]
     inlines = [SessionInline]
@@ -217,6 +251,8 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
             "window_seconds": qr.WINDOW_SECONDS,
             "refresh_seconds": qr.WINDOW_SECONDS,
             "grace_minutes": int(qr.SCAN_GRACE.total_seconds() // 60),
+            "server_time_ms": int(timezone.now().timestamp() * 1000),
+            "clock_tolerance_seconds": qr.CLOCK_TOLERANCE_SECONDS,
             "back_url": reverse("admin:rounds_roundsevent_change", args=[event.pk]),
         }
         return TemplateResponse(request, "admin/rounds/roundsevent/qr.html", context)
@@ -283,17 +319,38 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
         }
         return TemplateResponse(request, "admin/rounds/roundsevent/signin_sheet.html", context)
 
-    @admin.display(description="Signed off")
+    @admin.display(description="Sign-off")
     def signoff_state(self, obj):
-        from attendance.signoff import review
+        """
+        Where the event stands, with the one case that otherwise goes unseen
+        until a certificate is refused in December: signed off, then rows
+        arrived or a proposal moved.
+        """
+        from attendance.signoff import STATE_NEEDS_ANOTHER_LOOK, STATE_NONE, STATE_SIGNED_OFF, signoff_status
 
-        rows = [s for pr in review(obj) for s in pr.sessions if s.attendance.sources and not s.presented]
-        if not rows:
+        status = signoff_status(obj)
+        if status.state == STATE_NONE:
             return "-"
-        done = sum(1 for s in rows if s.is_confirmed)
+        if status.state == STATE_SIGNED_OFF:
+            return f"signed off ({status.decided})"
         url = reverse("admin:rounds_roundsevent_signoff", args=[obj.pk])
-        label = f"{done}/{len(rows)}"
-        return format_html('<a href="{}">{}</a>', url, label) if done < len(rows) else label
+        detail = f"{status.decided}/{status.total}"
+        if status.state == STATE_NEEDS_ANOTHER_LOOK:
+            parts = []
+            if status.new:
+                parts.append(f"{status.new} arrived since")
+            if status.stale:
+                parts.append(f"{status.stale} changed since")
+            detail = ", ".join(parts)
+        if status.blocking:
+            detail += f"; {status.blocking} blocking a certificate"
+        return format_html(
+            '<a href="{}"{}>{}: {}</a>',
+            url,
+            mark_safe(' style="color:#ba2121;font-weight:bold"') if status.state == STATE_NEEDS_ANOTHER_LOOK else "",
+            status.state,
+            detail,
+        )
 
     def signoff_view(self, request, pk):
         from attendance.signoff import (
