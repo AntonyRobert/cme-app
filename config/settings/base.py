@@ -54,6 +54,9 @@ INSTALLED_APPS = [
 AUTH_USER_MODEL = "accounts.User"
 
 MIDDLEWARE = [
+    # First: fixes REMOTE_ADDR from the proxy's header before anything logs it.
+    # A no-op unless TRUST_X_FORWARDED_FOR is set (prod.py only).
+    "core.middleware.ForwardedForMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -129,6 +132,9 @@ SERVER_EMAIL = DEFAULT_FROM_EMAIL
 # --- App settings ------------------------------------------------------------
 
 # Raw Teams exports and issued PDFs. Never served by Django or Caddy.
+# Only prod.py turns this on: see core.middleware.
+TRUST_X_FORWARDED_FOR = False
+
 UPLOAD_ROOT = Path(env("UPLOAD_ROOT", str(BASE_DIR / "uploads"))).resolve()
 
 # Defaults for a NEW program. Each program carries its own copy of these

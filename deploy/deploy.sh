@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Deploy one tenant. Deployment is a command, not a remembered sequence.
+#
+#   sudo /srv/cme/<org>/deploy/deploy.sh <org>
+#
+# Runs as root only to read /etc/cme/<org>.env and to restart the service;
+# every step that touches the checkout or the database runs as the owner
+# user (cme_<org>_owner), which Postgres maps to the owner role: that is the
+# only role allowed to run DDL. gunicorn, as cme_<org>, never can.
+set -euo pipefail
+
+ORG="${1:?usage: deploy.sh <org>}"
+ENV_FILE="/etc/cme/${ORG}.env"
+CHECKOUT="/srv/cme/${ORG}"
+OWNER="cme_${ORG}_owner"
+APP="cme_${ORG}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+[[ $EUID -eq 0 ]] || { echo "run with sudo: the env file is root-only" >&2; exit 1; }
+[[ -f "$ENV_FILE" ]] || { echo "no $ENV_FILE; run server-setup.sh first" >&2; exit 1; }
+
+# manage.py run from a shell does not see systemd's EnvironmentFile, so load it
+# here and hand exactly those variables to the owner user. Values never appear
+# on a command line (they would show in ps).
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+KEYS="$(grep -oE '^[A-Z_]+' "$ENV_FILE" | paste -sd, -)"
+as_owner() { sudo --preserve-env="$KEYS" -u "$OWNER" -H "$@"; }
+
+say() { printf '\n==> %s\n' "$*"; }
+
+cd "$CHECKOUT"
+say "Pulling"
+as_owner git pull --ff-only
+as_owner git log -1 --oneline
+
+say "Python environment"
+[[ -x .venv/bin/python ]] || as_owner python3.13 -m venv .venv
+as_owner .venv/bin/pip install --quiet --upgrade pip
+as_owner .venv/bin/pip install --quiet -r requirements.txt
+
+say "Checks"
+as_owner .venv/bin/python manage.py check --deploy --fail-level WARNING
+as_owner .venv/bin/python manage.py makemigrations --check --dry-run
+
+say "Migrations (as $OWNER)"
+as_owner .venv/bin/python manage.py migrate --noinput
+
+say "Grants for the app role"
+sudo -u "$OWNER" psql -v ON_ERROR_STOP=1 -v app="$APP" -d "$DATABASE_NAME" -f "$HERE/grants.sql" >/dev/null
+
+say "Static files"
+install -d -o "$OWNER" -g "$APP" -m 0755 "${STATIC_ROOT:-$CHECKOUT/staticfiles}"
+as_owner .venv/bin/python manage.py collectstatic --noinput --clear >/dev/null
+
+say "Restart"
+systemctl restart "cme@${ORG}"
+sleep 1
+systemctl status "cme@${ORG}" --no-pager --lines=5
+
+say "Smoke test over the socket"
+# Admin login page: proves gunicorn, Django and the database all answer.
+code="$(curl -s -o /dev/null -w '%{http_code}' --unix-socket "/run/cme/${ORG}.sock" \
+  -H "Host: ${DJANGO_ALLOWED_HOSTS%%,*}" -H "X-Forwarded-Proto: https" http://localhost/admin/login/)"
+[[ "$code" == "200" ]] || { echo "expected 200 from /admin/login/, got $code" >&2; exit 1; }
+echo "OK: ${DJANGO_ALLOWED_HOSTS%%,*} answers over the socket."

@@ -103,6 +103,17 @@ listed). Nothing pushed.
   page; the event and session forms have the FK. Attendee form at `/evaluate/<session>/`
   (stable, for the step-5 email), linked from `/me/`. Eighteen tests in
   `credits/tests/test_evaluation_forms.py`, including the four you listed.
+- **Deployment, step 1** (`deploy/`, `config/settings/prod.py`, `core/middleware.py`).
+  Written and tested as far as a Windows laptop can test Linux scripts: bash syntax,
+  `check --deploy` under the production settings with the env file's shape, the
+  forwarded-address middleware, and that the scripts are committed executable and take
+  the org. Nothing has run on a server yet; that is the next session's pause point.
+  `server-setup.sh` is one-time (packages incl. Postgres 17 from PGDG and Python 3.13 from
+  deadsnakes, two OS users per tenant, two peer-auth roles, directories, units, Caddy
+  site); `deploy.sh` is every deploy; `grants.sql` gives the app role its exact rights
+  after each migrate; `backup.sh` + timer and `restore-test.sh`; `manage.sh` for one-offs.
+  Email is `EMAIL_BACKEND=console|smtp` in the env file. The README in `deploy/` is the
+  runbook, including the full restore drill done by hand.
 - **The evaluation gate reversed** (your latest message). `Program.require_evaluation_for_credit`,
   default off; `evaluation_required(program)` is the one function, consulted by
   `SessionCredit` (`unlocked` = evaluated or not gated) for proposed, confirmed and
@@ -182,6 +193,19 @@ listed). Nothing pushed.
   worse than one that works: the view checks the window, validates required questions,
   writes the submission against the resolved version, and shows a complete one read-only
   with its own wording. The email that links to it is still step 5.
+- **Two OS users per tenant**, not one: `cme_<org>_owner` (migrate, owns the checkout)
+  and `cme_<org>` (gunicorn, owns uploads). Peer auth maps each to its role, so the only
+  way to run DDL is to be the owner user, and the serving process never is.
+  `deploy.sh` runs as root only to read the env file and restart the unit.
+- **Ubuntu 24.04 + deadsnakes Python 3.13** rather than a non-LTS image with 3.13 native.
+  Parity with local wins; the PPA is one line.
+- **Caddy serves `/static/`**, so no WhiteNoise and no new dependency.
+- **The audit log trusts the rightmost X-Forwarded-For only, and only in prod.py.**
+  Caddy strips client-sent forwarded headers, so the header holds exactly the client.
+- **Hostname `cme.mri3.ca`** replaces the `.com` pattern the docs had; the per-tenant
+  pattern becomes `<org>.cme.mri3.ca`.
+- **No `gh` on this machine**, so the GitHub repo and push are a two-line handoff: the
+  audit (index and full history) is clean and recorded in the notes above.
 - **The shared test program has the gate ON.** Most of the suite was written against
   the gate and keeps testing it (`programs/tests/factories.py`); tests of the default
   path make a named program, which gets the production default (off). Four of the

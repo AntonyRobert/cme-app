@@ -1,0 +1,31 @@
+# /etc/caddy/sites/__ORG__.caddy  (written by deploy/server-setup.sh)
+# Caddy gets the certificate on its own once __HOSTNAME__ resolves here.
+__HOSTNAME__ {
+	encode zstd gzip
+
+	# Collected static files, served by Caddy. Django never serves them.
+	handle_path /static/* {
+		root * /srv/cme/__ORG__/staticfiles
+		header Cache-Control "public, max-age=604800"
+		file_server
+	}
+
+	# Everything else to this tenant's gunicorn over its socket. Caddy sets
+	# X-Forwarded-For and X-Forwarded-Proto and strips any a client sent, so
+	# the app's audit log records the real client address.
+	handle {
+		reverse_proxy unix//run/cme/__ORG__.sock {
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	# Django sets HSTS, nosniff, referrer policy and frame options itself.
+	header -Server
+
+	log {
+		output file /var/log/caddy/__ORG__.access.log {
+			roll_size 50mb
+			roll_keep 10
+		}
+	}
+}

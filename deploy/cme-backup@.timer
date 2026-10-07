@@ -1,0 +1,11 @@
+[Unit]
+Description=CME nightly backup timer (%i)
+
+[Timer]
+# 03:15 server time, every night; catches up if the box was off.
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

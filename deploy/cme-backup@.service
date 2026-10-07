@@ -1,0 +1,7 @@
+[Unit]
+Description=CME nightly backup (%i)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/cme/%i/deploy/backup.sh %i

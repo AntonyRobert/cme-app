@@ -58,41 +58,36 @@ which is exactly the situation you hit when testing a restore.
 **Migrations run explicitly in the deploy script**, not automatically at startup. You want
 to see them happen.
 
-### deploy.sh (lives in the repo)
+### The scripts (in `deploy/`, with their own README)
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-ORG="${1:?usage: deploy.sh <org>}"
-
-cd "/srv/cme/$ORG"
-git pull --ff-only
-source .venv/bin/activate
-pip install -r requirements.txt
-python manage.py migrate
-python manage.py collectstatic --noinput
-sudo systemctl restart "cme@$ORG"
-sudo systemctl status "cme@$ORG" --no-pager
-```
-
-The script takes the organisation as its argument from the start, even while there is only
-one. See "Multi-tenant deployment" below for why.
+`deploy/deploy.sh <org>` is the deploy: pull, pip, `check --deploy`, `migrate` as the
+owner user, `grants.sql` for the app role, `collectstatic`, restart, and a smoke test
+over the socket. `deploy/server-setup.sh <org> <hostname> <git url>` is the one-time
+setup. Both take the organisation as their argument from the start, even while there is
+only one. See "Multi-tenant deployment" below for why.
 
 Deployment is a command, not a remembered sequence. The sequence is where mistakes live.
 
-Two things this sketch does not handle yet. Fix both when the script is actually written:
+Two things the earlier sketch left open, now settled in the scripts:
 
-- **Database roles.** Production has two: an owner role that runs `migrate`, and the app
-  role gunicorn uses, which has no DDL rights and no UPDATE or DELETE on the audit table.
-  With peer authentication a role is selected by the OS user, not a credential, so the
-  `migrate` line has to run as the owner's OS user (`sudo -u <owner> ...`) and gunicorn as
-  the app user. `prod.py` leaves `USER` empty so each process connects as whoever runs it.
-  New tables created by a migration also need their grants given to the app role.
-- **Environment.** `manage.py` run from a shell does not see the systemd
-  `EnvironmentFile`. The script has to load `/etc/cme/<org>.env` itself, including
-  `DJANGO_SETTINGS_MODULE=config.settings.prod`, or `manage.py` falls back to dev settings
-  and fails.
+- **Database roles.** Two per tenant, selected by OS user through peer authentication:
+  `cme_<org>_owner` runs `migrate` and owns the schema; `cme_<org>` runs gunicorn and
+  gets, from `deploy/grants.sql` after every migrate, SELECT/INSERT/UPDATE/DELETE on
+  every table except `audit_auditlog` (SELECT and INSERT only), with default privileges
+  so tables a later migration creates are covered. `prod.py` leaves `USER` empty so each
+  process connects as whoever runs it; gunicorn can never run DDL.
+- **Environment.** `deploy.sh` runs as root to read `/etc/cme/<org>.env` (root, 0600),
+  exports its variables and hands exactly those names to the owner user with
+  `sudo --preserve-env`, so nothing appears on a command line. `deploy/manage.sh <org>`
+  does the same for one-off `manage.py` commands.
+
+**Email is a switch.** `EMAIL_BACKEND=console` in the env file prints every email to the
+journal and sends nothing; `EMAIL_BACKEND=smtp` with the four `EMAIL_*` lines is SES. One
+line to flip once the domain is verified.
+
+**Real client addresses.** Caddy sets `X-Forwarded-For` (and strips any a client sent);
+`core.middleware.ForwardedForMiddleware`, enabled only by `prod.py`, copies the rightmost
+address into `REMOTE_ADDR` so the audit log records the client, not the socket.
 
 Requirements are split: `requirements.txt` is what the server installs,
 `requirements-dev.txt` adds the test and local-only tools.
@@ -125,14 +120,35 @@ redoing DKIM, warming the new sending IP. Not hard, but it breaks quietly.
 One instance per organisation. `<org>` is a short name such as `mcgill`; today there is one.
 
 ```
-/srv/cme/<org>/           app checkout for that instance
-/srv/cme/<org>/uploads/   raw Teams exports, never modified
+/srv/cme/<org>/           app checkout, owned cme_<org>_owner:cme_<org>
+/srv/cme/<org>/uploads/   raw Teams exports and PDFs, owned cme_<org>, never modified
+/srv/cme/<org>/staticfiles collected static files, served by Caddy
 /etc/cme/<org>.env        secrets and settings, mode 600, owned by root
-/run/cme/<org>.sock       gunicorn's Unix socket
-systemd: cme@<org>.service (gunicorn), cme-cron@<org>.timer (reminders)
-Caddy: reverse proxy <hostname> -> that socket, static files served directly
-Postgres: database and peer-auth roles for that instance only
+/run/cme/<org>.sock       gunicorn's Unix socket, 0660, caddy in the group
+/var/backups/cme/<org>/   nightly pg_dump and uploads tarball, 14 days
+systemd: cme@<org>.service (gunicorn), cme-backup@<org>.timer; cme-cron@<org>.timer (reminders) comes with step 5
+Caddy: /etc/caddy/sites/<org>.caddy, reverse proxy <hostname> -> that socket, /static/ served directly
+Postgres 17 (PGDG): database cme_<org>, peer-auth roles cme_<org>_owner and cme_<org>
 ```
+
+Ubuntu 24.04 LTS with Python 3.13 from the deadsnakes PPA (24.04 ships 3.12; parity with
+local wins over "whatever the image has").
+
+## Lightsail, by hand
+
+Create instance: region **Canada (Central), ca-central-1**; platform Linux; blueprint
+**OS only, Ubuntu 24.04 LTS**; plan **2 GB RAM, 2 vCPU, 60 GB SSD**; name it `cme-mcgill`.
+Then **Networking → Create static IP**, attach it to the instance (the default public IP
+changes on stop/start). Firewall on the instance: keep **SSH 22** and **HTTP 80**, add
+**HTTPS 443**; nothing else. Postgres never listens on TCP. Set the billing budget alarm.
+
+## Backups and the restore drill
+
+`deploy/backup.sh` runs nightly from `cme-backup@<org>.timer`; `deploy/restore-test.sh`
+restores the latest dump into a scratch database and compares counts with live. The full
+drill (stop, drop, restore, re-grant, start) is written out in `deploy/README.md` and is
+done by hand after the first deploy. Off-box copies (restic to S3) are a commented block
+in `backup.sh` until the bucket exists.
 
 ## Multi-tenant deployment
 
@@ -155,7 +171,7 @@ cheaper to get right the first time than to rename later.
 
 ### Hostnames
 
-- Default pattern: `<org>.cme.mri3.com`.
+- The first instance is `cme.mri3.ca` (McGill). Later tenants: `<org>.cme.mri3.ca`.
 - An institution may later point its own hostname at the server with a CNAME. Caddy gets a
   certificate for it like any other name.
 - **No code may assume the shape of the hostname.** Nothing parses a hostname to work out
@@ -185,7 +201,7 @@ cheaper to get right the first time than to rename later.
 
 `SESSION_COOKIE_DOMAIN` and `CSRF_COOKIE_DOMAIN` **stay unset**. That makes cookies
 host-only: the browser sends a session cookie back to the exact hostname that set it and no
-other. Setting either to `.cme.mri3.com` would send one tenant's session to every other
+other. Setting either to `.cme.mri3.ca` would send one tenant's session to every other
 tenant's host. Each tenant also has its own `SECRET_KEY`, so a session signed by one
 instance is not valid on another.
 

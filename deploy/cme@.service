@@ -1,0 +1,49 @@
+# One gunicorn per tenant. %i is the org: cme@mcgill selects /etc/cme/mcgill.env,
+# /srv/cme/mcgill and /run/cme/mcgill.sock, and runs as the user cme_mcgill,
+# which Postgres maps to the app role (no DDL, no UPDATE/DELETE on the audit log).
+[Unit]
+Description=CME rounds app (%i)
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=notify
+User=cme_%i
+Group=cme_%i
+WorkingDirectory=/srv/cme/%i
+EnvironmentFile=/etc/cme/%i.env
+# The socket is created 0660 cme_%i:cme_%i; caddy is in the group.
+UMask=0007
+ExecStart=/srv/cme/%i/.venv/bin/gunicorn config.wsgi:application \
+    --bind unix:/run/cme/%i.sock \
+    --workers 2 \
+    --timeout 60 \
+    --graceful-timeout 20 \
+    --max-requests 1000 --max-requests-jitter 100 \
+    --access-logfile - --error-logfile - \
+    --forwarded-allow-ips='*'
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+Restart=on-failure
+RestartSec=3
+
+# Hardening. The process may write its uploads and its socket, nothing else.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/srv/cme/%i/uploads /run/cme
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# The journal keeps stdout/stderr: journalctl -u cme@%i
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
