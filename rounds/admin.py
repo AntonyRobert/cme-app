@@ -1,22 +1,75 @@
 from django.contrib import admin, messages
 from django.db.models import Count, Q
+from django.forms.models import BaseInlineFormSet
 from django.utils import timezone
 from django.utils.html import format_html, format_html_join
 
 from audit.log import record
 from core.admin import AppendOnlyAdmin, BaseAdmin, SafeModelForm, admin_link, changelist_url
 
-from .models import COIDeclaration, LearningObjective, RoundsEvent, Session, SessionPresenter
+from .models import (
+    DEFAULT_SESSION_LENGTH,
+    COIDeclaration,
+    LearningObjective,
+    RoundsEvent,
+    Session,
+    SessionPresenter,
+)
+
+
+class SessionFormSet(BaseInlineFormSet):
+    """
+    Fill in the times nobody wants to type. A row with a title but no
+    start begins when the previous row ends (or when the event starts),
+    and lasts an hour unless an end is given.
+    """
+
+    def clean(self):
+        super().clean()
+        event = self.instance
+        if not event.start_at:
+            return
+        cursor = event.start_at
+        rows = sorted(
+            (f for f in self.forms if f.has_changed() and not self._should_delete_form(f)),
+            key=lambda f: (f.cleaned_data.get("position") or 0),
+        )
+        for form in rows:
+            data = form.cleaned_data
+            if not data.get("start_at"):
+                data["start_at"] = form.instance.start_at = cursor
+            if not data.get("end_at"):
+                data["end_at"] = form.instance.end_at = data["start_at"] + DEFAULT_SESSION_LENGTH
+            cursor = data["end_at"]
+
+
+class SessionRowForm(SafeModelForm):
+    def has_changed(self):
+        # A new row with only its number filled in is an empty row.
+        if self.instance._state.adding and set(self.changed_data) <= {"position"}:
+            return False
+        return super().has_changed()
 
 
 class SessionInline(admin.TabularInline):
     model = Session
-    form = SafeModelForm
-    fields = ["position", "title", "start_at", "end_at", "submitted_at"]
+    form = SessionRowForm
+    formset = SessionFormSet
+    fields = ["position", "title", "start_at", "end_at"]
     show_change_link = True
+    verbose_name_plural = (
+        "Sessions (type the titles; a blank start follows the previous session, "
+        "a blank end is an hour later)"
+    )
 
     def get_extra(self, request, obj=None, **kwargs):
         return 0 if obj else 3
+
+    def get_formset_kwargs(self, request, obj, inline, prefix):
+        kwargs = super().get_formset_kwargs(request, obj, inline, prefix)
+        if obj is None:
+            kwargs["initial"] = [{"position": n} for n in (1, 2, 3)]
+        return kwargs
 
 
 @admin.register(RoundsEvent)
@@ -41,8 +94,9 @@ class RoundsEventAdmin(BaseAdmin):
             "Schedule",
             {
                 "fields": ["start_at", "end_at"],
-                "description": "The outer bounds. Attended time is counted against the "
-                "sessions' own times, below. If a session ran over, change its end time.",
+                "description": "When rounds starts; the end can be left blank for three "
+                "hours later. Attended time is counted against the sessions' own times, "
+                "below. If a talk ran over, change its end time.",
             },
         ),
         ("Teams", {"fields": ["teams_join_url", "teams_meeting_id"]}),

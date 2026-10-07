@@ -172,7 +172,7 @@ flyer renders an event, the evaluation form targets a session.
 | id | UUID pk | |
 | title | text | Defaults to the `SERIES_NAME` setting. Prints on certificate lines |
 | date | date | |
-| start_at, end_at | timestamptz | The outer bounds. Every session falls inside them |
+| start_at, end_at | timestamptz | The outer bounds. Every session falls inside them. A blank end is three hours after the start; a blank `date` is the start's day |
 | teams_join_url | text | The link pasted in the invite |
 | teams_meeting_id | text, nullable | Lets an upload match an event automatically |
 | status | enum | draft, published, held, closed |
@@ -194,7 +194,7 @@ a talk runs over, change that session's `end_at` once and everyone's credit foll
 | event | FK RoundsEvent | |
 | position | smallint | 1, 2, 3. Order on the flyer |
 | title | text | |
-| start_at, end_at | timestamptz | Entered by the presenter. `end_at` defaults to an hour after the start |
+| start_at, end_at | timestamptz | Entered by the presenter. A blank start follows the previous session (or the event's start); a blank end is an hour later |
 | draft_blurb, published_blurb | text | The draft/published split |
 | submitted_at | timestamptz, nullable | Null means the presenters haven't filled it yet |
 

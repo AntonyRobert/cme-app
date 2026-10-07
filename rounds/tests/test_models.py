@@ -47,6 +47,26 @@ def test_a_session_ends_an_hour_after_it_starts_by_default():
     assert (session.length_seconds, session.length_minutes) == (3600, 60)
 
 
+def test_an_event_fills_in_its_end_and_date_from_its_start():
+    event = RoundsEvent(start_at=at(0), accredited_credits=Decimal("3.00"))
+    event.full_clean()
+    event.save()
+    assert event.end_at == at(180)
+    assert event.date == at(0).date()
+
+
+def test_a_session_with_no_start_follows_the_previous_one():
+    event = make_event(minutes=180, sessions=0)
+    first = Session(event=event, position=1, title="One")
+    first.full_clean()
+    first.save()
+    second = Session(event=event, position=2, title="Two")
+    second.full_clean()
+    second.save()
+    assert (first.start_at, first.end_at) == (at(0), at(60))
+    assert (second.start_at, second.end_at) == (at(60), at(120))
+
+
 def test_a_session_must_fall_inside_its_event():
     event = make_event(minutes=60, sessions=0)
     for start, end in ((-10, 30), (30, 70), (-5, 65)):

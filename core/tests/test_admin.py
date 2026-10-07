@@ -2,19 +2,22 @@
 The admin is the whole interface at this stage, so it is tested through
 real requests against the seeded data.
 """
+import datetime
+
 import pytest
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.urls import reverse
+from django.utils import timezone
 
 from attendance.aggregation import attended_minutes
 from attendance.models import AttendanceRecord, AttendanceSupersession, AttendanceUpload
 from audit.models import AuditLog
 from credits.models import CreditAdjustment, EvaluationSubmission, EvaluationWindow
 from people.models import Person, PersonEmail
-from rounds.models import COIDeclaration, RoundsEvent
+from rounds.models import COIDeclaration, RoundsEvent, Session
 
 pytestmark = pytest.mark.django_db
 
@@ -534,3 +537,107 @@ def test_person_page_shows_earned_versus_certified(client, boss, seeded):
     page = client.get(url(Person, "change", who("Haddad").pk)).content.decode()
     assert "Credit, earned versus certified" in page
     assert "not yet certified" in page
+
+
+# --- Entering the next event ------------------------------------------------
+
+
+def test_adding_an_event_needs_only_a_start_and_three_titles(client, boss, seeded):
+    response = client.post(
+        url(RoundsEvent, "add"),
+        {
+            "title": "Health Informatics Rounds",
+            "date": "",
+            "status": "draft",
+            "accredited_credits": "3.00",
+            "start_at_0": "2026-10-08",
+            "start_at_1": "09:00:00",
+            "end_at_0": "",
+            "end_at_1": "",
+            "teams_join_url": "https://teams.microsoft.com/meet/demo",
+            "teams_meeting_id": "",
+            "sessions-TOTAL_FORMS": 3,
+            "sessions-INITIAL_FORMS": 0,
+            "sessions-0-position": 1,
+            "sessions-0-title": "First talk",
+            "sessions-1-position": 2,
+            "sessions-1-title": "Second talk",
+            "sessions-2-position": 3,
+            "sessions-2-title": "Third talk",
+        },
+    )
+    assert response.status_code == 302, response.context["adminform"].form.errors
+    event = RoundsEvent.objects.get(title="Health Informatics Rounds", date="2026-10-08")
+    local = lambda value: timezone.localtime(value).strftime("%H:%M")
+    assert (local(event.start_at), local(event.end_at)) == ("09:00", "12:00")
+    assert [
+        (s.position, s.title, local(s.start_at), local(s.end_at))
+        for s in event.sessions.order_by("start_at")
+    ] == [
+        (1, "First talk", "09:00", "10:00"),
+        (2, "Second talk", "10:00", "11:00"),
+        (3, "Third talk", "11:00", "12:00"),
+    ]
+
+
+def test_an_empty_session_row_is_ignored_and_a_given_time_is_kept(client, boss, seeded):
+    response = client.post(
+        url(RoundsEvent, "add"),
+        {
+            "title": "Short rounds",
+            "status": "draft",
+            "accredited_credits": "2.00",
+            "start_at_0": "2026-10-22",
+            "start_at_1": "12:00:00",
+            "sessions-TOTAL_FORMS": 3,
+            "sessions-INITIAL_FORMS": 0,
+            "sessions-0-position": 1,
+            "sessions-0-title": "Only talk",
+            "sessions-1-position": 2,
+            "sessions-1-title": "Late talk",
+            "sessions-1-start_at_0": "2026-10-22",
+            "sessions-1-start_at_1": "13:30:00",
+            "sessions-2-position": 3,
+        },
+    )
+    assert response.status_code == 302, response.context["adminform"].form.errors
+    event = RoundsEvent.objects.get(title="Short rounds")
+    local = lambda value: timezone.localtime(value).strftime("%H:%M")
+    assert [(s.title, local(s.start_at), local(s.end_at)) for s in event.sessions.order_by("start_at")] == [
+        ("Only talk", "12:00", "13:00"),
+        ("Late talk", "13:30", "14:30"),
+    ]
+
+
+def test_a_session_added_on_its_own_page_follows_the_previous_one(client, boss, seeded):
+    first = seeded[0]
+    response = client.post(
+        url(Session, "add"),
+        {
+            "event": first.pk,
+            "position": 4,
+            "title": "Bonus talk",
+            "draft_blurb": "",
+            "published_blurb": "",
+            "session_presenters-TOTAL_FORMS": 0,
+            "session_presenters-INITIAL_FORMS": 0,
+            "objectives-TOTAL_FORMS": 0,
+            "objectives-INITIAL_FORMS": 0,
+        },
+    )
+    # The seeded event ends at 15:00 and its last talk ends at 15:00, so a
+    # fourth hour does not fit: the form says so instead of crashing.
+    assert response.status_code == 200
+    assert "start_at" in response.context["adminform"].form.errors
+    first.end_at = first.end_at + datetime.timedelta(hours=1)
+    first.save()
+    response = client.post(url(Session, "add"), {
+        "event": first.pk, "position": 4, "title": "Bonus talk",
+        "draft_blurb": "", "published_blurb": "",
+        "session_presenters-TOTAL_FORMS": 0, "session_presenters-INITIAL_FORMS": 0,
+        "objectives-TOTAL_FORMS": 0, "objectives-INITIAL_FORMS": 0,
+    })
+    assert response.status_code == 302, response.context["adminform"].form.errors
+    bonus = Session.objects.get(title="Bonus talk")
+    assert timezone.localtime(bonus.start_at).strftime("%H:%M") == "15:00"
+    assert timezone.localtime(bonus.end_at).strftime("%H:%M") == "16:00"

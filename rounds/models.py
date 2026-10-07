@@ -20,6 +20,8 @@ CREDIT_WINDOW_GRACE = datetime.timedelta(minutes=5)
 
 # A session's end defaults to this long after its start.
 DEFAULT_SESSION_LENGTH = datetime.timedelta(hours=1)
+# An event's end defaults to this long after its start: three one-hour talks.
+DEFAULT_EVENT_LENGTH = datetime.timedelta(hours=3)
 
 
 def default_event_title():
@@ -45,9 +47,9 @@ class RoundsEvent(UUIDModel):
     title = models.CharField(
         max_length=200, default=default_event_title, help_text="Prints on certificate lines."
     )
-    date = models.DateField()
+    date = models.DateField(blank=True, help_text="Blank means the day it starts.")
     start_at = models.DateTimeField(help_text="Every session must fall between these two.")
-    end_at = models.DateTimeField()
+    end_at = models.DateTimeField(blank=True, help_text="Blank means three hours after the start.")
     teams_join_url = models.URLField(max_length=2000, blank=True)
     teams_meeting_id = models.CharField(max_length=200, null=True, blank=True)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
@@ -85,8 +87,16 @@ class RoundsEvent(UUIDModel):
             return None
         return RoundsEvent.objects.filter(pk=self.pk).values_list("status", flat=True).first()
 
+    def _fill_defaults(self):
+        if self.start_at:
+            if self.end_at is None:
+                self.end_at = self.start_at + DEFAULT_EVENT_LENGTH
+            if self.date is None:
+                self.date = timezone.localdate(self.start_at)
+
     def clean(self):
         super().clean()
+        self._fill_defaults()
         if self.start_at and self.end_at and self.end_at <= self.start_at:
             raise ValidationError({"end_at": "The event must end after it starts."})
         if self._stored_status() == self.Status.CLOSED and not self.is_closed:
@@ -97,6 +107,7 @@ class RoundsEvent(UUIDModel):
     def save(self, *args, **kwargs):
         if self._stored_status() == self.Status.CLOSED and not self.is_closed:
             raise ImmutableRowError("A closed event cannot be reopened.")
+        self._fill_defaults()
         super().save(*args, **kwargs)
 
 
@@ -166,7 +177,9 @@ class Session(UUIDModel):
     presenters = models.ManyToManyField(
         Person, through="SessionPresenter", related_name="sessions_presented"
     )
-    start_at = models.DateTimeField()
+    start_at = models.DateTimeField(
+        blank=True, help_text="Blank means right after the previous session, or the event's start."
+    )
     end_at = models.DateTimeField(blank=True, help_text="Blank means one hour after the start.")
     draft_blurb = models.TextField(blank=True)
     published_blurb = models.TextField(blank=True)
@@ -195,6 +208,14 @@ class Session(UUIDModel):
         return self.length_seconds // 60
 
     def _fill_defaults(self):
+        if self.start_at is None and self.event_id:
+            previous = (
+                Session.objects.filter(event_id=self.event_id)
+                .exclude(pk=self.pk)
+                .order_by("-end_at")
+                .first()
+            )
+            self.start_at = previous.end_at if previous else self.event.start_at
         if self.start_at and self.end_at is None:
             self.end_at = self.start_at + DEFAULT_SESSION_LENGTH
 
