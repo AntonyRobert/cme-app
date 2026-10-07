@@ -6,12 +6,13 @@ the build order (models, migrations, admin, tests), and the per-session credit r
 Nothing has been pushed; the repo has no remote. Round four (the design review) is the
 newest section.
 
-## Round four: the design review, groups 1 to 5
+## Round four: the design review, groups 1 to 5, the sheet, and QR
 
-Written 2026-10-07. Groups 1 to 5 of the order in your review are built: exact
-certificates, Institution and Program, the three sources reconciled, the upload preview,
-and sign-off, plus the paper sign-in sheet entry screen. QR sign-in is **not started**.
-Nothing pushed.
+Written 2026-10-07. Everything in the review order is built: exact certificates,
+Institution and Program, the three sources reconciled, the upload preview, sign-off, the
+paper sign-in sheet entry screen, and QR sign-in; plus the two changes from your second
+note (sign-off as an explicit program-admin permission; what blocks a certificate,
+listed). Nothing pushed.
 
 ### What was built
 
@@ -61,6 +62,25 @@ Nothing pushed.
 - **The sign-in sheet is typed in, not uploaded** (your note mid-build). `signin_sheet`
   rows carry no upload: `created_by` and one audit entry per sitting are the provenance.
   The constraint and docs are updated (`0005_signin_sheet_is_typed_in`).
+- **Sign-off is an explicit, program-scoped permission** (`b5b84ae`).
+  `attendance.sign_off_attendance` sits in the Program admin group only, and
+  `confirm_event` / `confirm_person` also require the program-admin role in the event's
+  program (`can_sign_off`, one function). The admin page shows coordinators the whole
+  review, held rows and reasons included, with no buttons and a line saying who signs.
+  Tested: a coordinator here who is a program admin elsewhere cannot sign here.
+- **What blocks a certificate is listed.** `certificate_blockers(person, program,
+  period)` names every event in the period with evaluated-but-unsigned minutes, by
+  date, each with its sign-off URL; `NotSignedOff` carries the list. The person's admin
+  page has a "Blocking a certificate" block per program for the current accreditation
+  year. There is no issue screen yet (certificates are view-only until the issue step),
+  so this is where the list lives for now; the issue screen will reuse the function.
+- **QR sign-in.** `attendance/qr.py` holds the rules: thirty-second windows, HMAC token
+  over session and window, valid for the current and previous window, accepted fifteen
+  minutes either side of the session, one row per person per session with
+  `match_method = self` and no `created_by` (the attendee is the actor; audit-logged as
+  such). `/scan/<session>/<window>/<token>/` is the public route (marked, with the reason,
+  so the URL walk passes). The room page is on the event admin: full screen, inline SVG,
+  meta refresh every thirty seconds, picks the running session. Fifteen tests.
 - **"Import paper sign-in sheet"** on the event page. Lists the program's known people
   (anyone who attended, evaluated or presented at one of its events) with a checkbox per
   session, five blank lines for names not on the list, and a Record button. A tick is a
@@ -96,6 +116,23 @@ Nothing pushed.
   event being edited, falling back to the first program the staff member has a role in.
 - **`Program.retention_years`** is stored and editable, default 7. No deletion or
   anonymization logic, per your note; still open in decisions.md.
+- **A scan made while signed out is remembered for twenty minutes and written after
+  sign-in.** The code lives a minute; the magic-link round trip takes longer. The token
+  is verified at scan time; the completion only has to come soon after. The remembered
+  scan lives in the Django session, survives the key rotation at sign-in, and is used
+  once. I added a safe local `next` to the sign-in flow for this (anything off-site is
+  dropped).
+- **In a break, the room page shows the upcoming talk**, not the one that just ended:
+  people scan on the way in. Running beats both.
+- **Read-only staff may show the room page.** Showing the code lets people in the room
+  sign in, which is what the room is for; it writes nothing itself.
+- **`created_by` is now nullable, for QR rows only** (check constraint). The convention
+  says staff actions point at User and attendee facts at Person; a scan is an attendee
+  fact, so a staff FK would be a lie. The audit entry names the person.
+- **Blockers are evaluated-but-unsigned sessions.** Unevaluated minutes earn nothing
+  and block nothing, which keeps the old "no credit, no line" behaviour; a late
+  evaluation after issue is the reissue case it always was.
+- **Dependency added, with your OK: `segno==1.6.6`** (pure Python, zero dependencies).
 - **Pending uploads are files, not rows.** A half-finished preview leaves a file in
   `pending/` and nothing else, so nothing in the database can be "stored but not
   confirmed". The cost is that a crash between confirm and import leaves the pending file
@@ -133,6 +170,16 @@ Nothing pushed.
 - A walk-in has to be matched in the queue before the event can be signed off, like any
   unmatched row. Five blank lines is a guess at how many a sheet has; the page can be
   submitted twice.
+- The room page needs the server's clock and the phones' clocks within about thirty
+  seconds of each other; both are NTP-synced in practice, but a laptop with a drifted
+  clock would show codes the server calls expired. The page says "scan the code showing
+  now", which is the right instruction either way.
+- The scan page is the first attendee-facing page that does something at scan time on a
+  phone, and `base.html` has only the design tokens. It works; it is not styled beyond
+  that.
+- `remember_next` runs on every GET of the sign-in page, so a person who scans, then
+  wanders to `/signin/` by hand, loses the `next` but keeps the pending scan; visiting
+  `/scan/done/` after sign-in still completes it. Fine, but a little surprising.
 
 ## Round three: the real export, and two kinds of credit
 

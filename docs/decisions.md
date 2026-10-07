@@ -273,7 +273,13 @@ Not scan-in/scan-out: people forget to scan out, and orphan check-ins are a wors
 reconciliation problem than the one being solved; the sign-off step catches bad claims.
 The displayed code rotates every thirty seconds so a photographed code texted to someone
 at home does not work, and the page it opens requires sign-in so a scan is tied to a
-person, never a typed name.
+person, never a typed name. Because a magic-link sign-in takes longer than a code lives,
+a valid scan made while signed out is remembered in the browser for twenty minutes and
+written after sign-in. Scans are accepted fifteen minutes either side of the session.
+The display page prefers the running talk and, in a break, the upcoming one: people scan
+on the way in. The code is rendered server-side with `segno` (pure Python, no
+dependencies); the alternatives were a CDN script on a staff page or a hand-written
+encoder, both worse.
 
 **The paper sign-in sheet is typed in, not uploaded.**
 An entry screen lists the program's known people with a checkbox per session, plus a

@@ -9,6 +9,7 @@ from django import forms
 from django.contrib import messages
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_http_methods, require_POST
 
 from core.authz import public_object
@@ -48,9 +49,31 @@ def signed_in(view):
     return wrapper
 
 
+NEXT_KEY = "signin_next"
+
+
+def remember_next(request):
+    """Keep a safe, local `next` across the email round trip; anything else is dropped."""
+    target = request.GET.get("next") or request.POST.get("next")
+    if target and url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}):
+        request.session[NEXT_KEY] = target
+    else:
+        request.session.pop(NEXT_KEY, None)
+
+
+def after_sign_in(request):
+    """Where to go once signed in: the remembered local page, else the credits page."""
+    target = request.session.pop(NEXT_KEY, None)
+    if target and url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}):
+        return target
+    return reverse("signin:me")
+
+
 @require_http_methods(["GET", "POST"])
 def start(request):
     form = EmailForm(request.POST or None)
+    if request.method == "GET":
+        remember_next(request)
     if request.method == "POST" and form.is_valid():
         email = form.cleaned_data["email"]
         try:
@@ -86,7 +109,7 @@ def redeem(request, token):
         return render(request, "signin/invalid.html", status=410)
     if redemption.person is not None:
         services.sign_in(request, redemption.person)
-        return redirect("signin:me")
+        return redirect(after_sign_in(request))
     if redemption.needs_profile:
         request.session[services.SESSION_PENDING_EMAIL_KEY] = redemption.email
         request.session["verified_email"] = redemption.email
@@ -104,7 +127,7 @@ def complete(request):
         person = services.create_person_for(email, request=request, **form.cleaned_data)
         request.session.pop("verified_email", None)
         services.sign_in(request, person)
-        return redirect("signin:me")
+        return redirect(after_sign_in(request))
     return render(request, "signin/complete.html", {"form": form, "email": email})
 
 

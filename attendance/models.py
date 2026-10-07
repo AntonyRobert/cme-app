@@ -111,6 +111,7 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
         EMAIL_EXACT = "email_exact", "Email (exact)"
         EMAIL_ALIAS = "email_alias", "Email (alias)"
         MANUAL = "manual", "Manual"
+        SELF = "self", "Self (signed in and scanned)"
         UNMATCHED = "unmatched", "Unmatched"
 
     FROZEN_FIELDS = (
@@ -186,8 +187,10 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
     reason = models.TextField(
         null=True, blank=True, help_text="Required on every row that didn't come from Teams."
     )
+    # The staff member who entered or uploaded the row. Null only for a QR
+    # scan, which the attendee makes themselves (the audit entry names them).
     created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+"
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -241,6 +244,10 @@ class AttendanceRecord(FrozenFieldsMixin, UUIDModel):
                 condition=Q(source="teams_upload", upload__isnull=False)
                 | (~Q(source="teams_upload") & Q(upload__isnull=True)),
                 name="attendancerecord_upload_iff_teams",
+            ),
+            models.CheckConstraint(
+                condition=Q(created_by__isnull=False) | Q(source="qr_signin"),
+                name="attendancerecord_created_by_unless_qr",
             ),
             # A tick or a scan claims a whole session, so it names one and has no times.
             models.CheckConstraint(

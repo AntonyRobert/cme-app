@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="{{ refresh_seconds }}">
+  <title>Sign in: {{ session.title }}</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body { display: flex; flex-direction: column; align-items: center; justify-content: center;
+           font-family: system-ui, sans-serif; background: #fff; color: #111; text-align: center; }
+    .code { width: min(70vh, 90vw); }
+    .code svg { width: 100%; height: auto; }
+    h1 { font-size: 2.2rem; margin: 0.4em 0 0.1em; }
+    p { font-size: 1.3rem; margin: 0.2em 0; }
+    .muted { color: #666; font-size: 1rem; }
+    .nav { position: fixed; top: 8px; left: 8px; font-size: 0.9rem; }
+    .nav a { margin-right: 1em; }
+  </style>
+</head>
+<body>
+  <div class="nav">
+    <a href="{{ back_url }}">&larr; {{ event }}</a>
+    {% for s in sessions %}<a href="?session={{ s.pk }}"{% if s.pk == session.pk %} style="font-weight:bold"{% endif %}>{{ s.position }}</a>{% endfor %}
+  </div>
+  {% if session %}
+  <div class="code">{{ svg|safe }}</div>
+  <h1>{{ session.title }}</h1>
+  <p>Scan to sign in to this talk. {{ event.program.name }}, {{ event.date|date:"j F Y" }}.</p>
+  <p class="muted">The code changes every {{ window_seconds }} seconds; a photo of it will not work later.
+  {% if not open %}Sign-in for this talk opens {{ grace_minutes }} minutes before it starts.{% endif %}</p>
+  {% else %}
+  <h1>No sessions</h1>
+  <p>This event has no sessions to sign in to.</p>
+  {% endif %}
+</body>
+</html>

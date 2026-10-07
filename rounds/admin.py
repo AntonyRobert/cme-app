@@ -171,6 +171,11 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
                 self.admin_site.admin_view(self.signin_sheet_view),
                 name="rounds_roundsevent_signin_sheet",
             ),
+            path(
+                "<uuid:pk>/qr/",
+                self.admin_site.admin_view(self.qr_view),
+                name="rounds_roundsevent_qr",
+            ),
             *super().get_urls(),
         ]
 
@@ -179,11 +184,42 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
         if not obj.pk:
             return "-"
         return format_html(
+            '<a class="button" href="{}" target="_blank">Show QR code for the room</a> &nbsp; '
             '<a class="button" href="{}">Import paper sign-in sheet</a> &nbsp; '
             '<a class="button" href="{}">Review and sign off attendance</a>',
+            reverse("admin:rounds_roundsevent_qr", args=[obj.pk]),
             reverse("admin:rounds_roundsevent_signin_sheet", args=[obj.pk]),
             reverse("admin:rounds_roundsevent_signoff", args=[obj.pk]),
         )
+
+    def qr_view(self, request, pk):
+        """
+        The code for the room, full screen, refreshing itself every window.
+        Anyone who can see the event may show it: showing the code lets
+        people in the room sign in, which is what the room is for.
+        """
+        from attendance import qr
+
+        event = self.get_queryset(request).filter(pk=pk).first()
+        if event is None:
+            raise Http404
+        if not self.has_view_permission(request, event):
+            raise PermissionDenied
+        sessions = list(event.sessions.order_by("start_at", "position"))
+        chosen = request.GET.get("session")
+        session = next((s for s in sessions if str(s.pk) == chosen), None) or qr.current_session(event)
+        context = {
+            "event": event,
+            "sessions": sessions,
+            "session": session,
+            "open": session is not None and qr.session_is_open(session),
+            "svg": qr.svg_for(request.build_absolute_uri(qr.scan_path(session))) if session else "",
+            "window_seconds": qr.WINDOW_SECONDS,
+            "refresh_seconds": qr.WINDOW_SECONDS,
+            "grace_minutes": int(qr.SCAN_GRACE.total_seconds() // 60),
+            "back_url": reverse("admin:rounds_roundsevent_change", args=[event.pk]),
+        }
+        return TemplateResponse(request, "admin/rounds/roundsevent/qr.html", context)
 
     def _writable_event(self, request, pk):
         event = self.get_queryset(request).filter(pk=pk).first()

@@ -5,3 +5,5 @@
 Django==5.2.18
 psycopg[binary]==3.3.6
 gunicorn==26.2.0
+# QR codes for room sign-in. Pure Python, no dependencies, SVG out.
+segno==1.6.6

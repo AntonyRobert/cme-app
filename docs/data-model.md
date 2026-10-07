@@ -426,9 +426,9 @@ the old rows, and the matches pointing at them, on a re-parse is **not yet desig
 | duration_seconds | int | The one field every row has. **Not what the credit sum uses for timed rows** |
 | attributed_to | FK AttendanceRecord, nullable | The room's Teams row this person sat in |
 | person | FK Person, nullable | Null means unmatched. An interpretation: may be revised |
-| match_method | enum | email_exact, email_alias, manual, unmatched |
-| reason | text, nullable | Required when source is not teams_upload (check constraint) |
-| created_by, created_at | FK User, timestamptz | |
+| match_method | enum | email_exact, email_alias, manual, self, unmatched. `self`: the signed-in attendee scanned the code |
+| reason | text, nullable | Required when source is manual or room_roster (check constraint) |
+| created_by, created_at | FK User (nullable), timestamptz | The staff member who entered or uploaded the row. Null only when source is qr_signin (check constraint): the attendee is the actor, named in the audit entry |
 | matched_at, matched_by | timestamptz, FK User | |
 
 **Observation fields** never change after insert: `source`, `upload`, `parser_version`,
@@ -558,6 +558,25 @@ forget to scan out, and the orphan check-ins are a worse reconciliation problem 
 one being solved. A scan becomes an `AttendanceRecord` with `source = qr_signin` and the
 session; a second scan of the same session by the same person is ignored (unique on
 `(person, session)` where `source = qr_signin`). The sign-off step catches bad claims.
+
+How it runs (`attendance/qr.py`, `attendance/views.py`):
+
+- The event page has **Show QR code for the room**: a full-screen page that picks the
+  session running now (in a break, the upcoming one), renders the code as inline SVG
+  (`segno`, pure Python) and refreshes itself every thirty seconds with a meta refresh.
+  No JavaScript. Anyone who can see the event may show it. `?session=` overrides.
+- The URL is `/scan/<session id>/<window>/<token>/`, window = unix time ÷ 30, token =
+  `salted_hmac("attendance.qr", "<session>:<window>")` shortened to 32 hex characters,
+  compared in constant time. A code is accepted during its window and the next.
+- A scan is accepted from fifteen minutes before the session to fifteen minutes after;
+  outside that the page says the session is not open, and nothing is remembered.
+- Signed in: the row is written at once, audit-logged as the attendee's own action
+  (`attendance.qr_scanned`), and the page says so. A second scan says "already".
+- Not signed in: the valid scan (session, time) is remembered in the browser session for
+  twenty minutes and the person is sent to the magic-link sign-in with a local `next`;
+  on return (`/scan/done/`) the remembered scan is written. The token was checked at scan
+  time; the email round trip only has to finish within the twenty minutes. A `next` that
+  points off the site is dropped.
 
 ### Upload preview: nothing is stored until confirmed
 

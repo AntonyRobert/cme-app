@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Signed in to {{ session.title }}{% endblock %}
+{% block content %}
+<h1>{% if created %}You are signed in{% else %}Already signed in{% endif %}</h1>
+<p><strong>{{ person.full_name }}</strong>, {{ session.event.date|date:"j M Y" }}:
+<strong>{{ session.title }}</strong> ({{ session.event.program.name }}).</p>
+{% if created %}
+<p>Your presence at this talk is recorded. Scan the code again for each talk: one scan per
+talk is what counts. Credit for attending is released when the talk's evaluation is complete
+and the program office has signed off the day's attendance.</p>
+{% else %}
+<p>This talk was already recorded for you. Nothing changed.</p>
+{% endif %}
+<p><a href="{% url 'signin:me' %}">My credits</a></p>
+{% endblock %}

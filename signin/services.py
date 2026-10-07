@@ -150,7 +150,7 @@ def create_person_for(email, *, given_name, family_name, role, request=None):
 
 def sign_in(request, person):
     """This session now belongs to `person`: new session key, 90 days."""
-    request.session.cycle_key()
+    request.session.cycle_key()  # keeps the data, changes the key
     request.session[SESSION_PERSON_KEY] = str(person.pk)
     request.session[SESSION_SIGNED_IN_AT_KEY] = timezone.now().isoformat()
     request.session.set_expiry(int(SESSION_AGE.total_seconds()))
