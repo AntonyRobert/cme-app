@@ -181,7 +181,7 @@ flyer renders an event, the evaluation form targets a session.
 | date | date | |
 | start_at, end_at | timestamptz | The outer bounds. Every session falls inside them. A blank end is three hours after the start; a blank `date` is the start's day |
 | teams_join_url | text | The link pasted in the invite |
-| teams_meeting_id | text, nullable | Lets an upload match an event automatically |
+| teams_meeting_title | text | The meeting title exactly as Teams shows it. An export is matched to an event on this plus the date; exports carry no meeting ID |
 | status | enum | draft, published, held, closed |
 | accredited_credits | decimal | Credits available for the whole event. Must be a multiple of 0.25 |
 
@@ -313,6 +313,7 @@ unmatched rows wait in a queue, and rows are added by hand for people Teams neve
 | uploaded_at | timestamptz | |
 | parsed_at | timestamptz, nullable | |
 | parser_version | text, nullable | Which parser produced the current rows |
+| parse_warnings | jsonb | What the parser noticed but did not stop for, e.g. Teams' own totals disagreeing with its rows |
 | row_count | int | Sanity check |
 
 Never edit this file. If a parse was wrong, fix the parser and re-parse. What happens to
@@ -333,7 +334,7 @@ the old rows, and the matches pointing at them, on a re-parse is **not yet desig
 | session | FK Session, nullable | Hours-only rows only: which session the minutes belong to. Check constraint: a row without times must have one, and vice versa |
 | raw_display_name | text, nullable | Exactly as Teams wrote it |
 | raw_email | text, nullable | Exactly as Teams wrote it. Sometimes a UPN, sometimes nothing |
-| raw_participant_role | text, nullable | Organizer, Presenter, Attendee |
+| raw_participant_role | text, nullable | **A Teams meeting permission**, as written. Labelled "Teams meeting role" in the admin. Everyone is given Presenter so they can share a screen; it says nothing about who presented and nothing in the credit path reads it |
 | join_at, leave_at | timestamptz, nullable | Both set or both null (check constraint). Null on a manual hours-only row |
 | duration_seconds | int | The one field every row has. **Not what the credit sum uses for timed rows** |
 | attributed_to | FK AttendanceRecord, nullable | The room's Teams row this person sat in |
@@ -374,16 +375,36 @@ inflating the credit. Also checked: `old != new`, and both rows share an `event`
 
 ### Parser notes
 
-Teams writes **one row per join, not one row per person**. People drop and rejoin, laptops
-sleep, they dial back in from a phone. A 60-minute attendee can appear as four rows of 15
-minutes, or as two overlapping rows (laptop and phone at once).
+What the file actually is, from a real export (the anonymized copy is
+`attendance/tests/fixtures/teams-export-2026-09-10.csv`; `attendance/teams.py` reads it):
 
-Two more quirks:
+- **UTF-16 LE with a BOM, CRLF line endings, tab-separated**, whatever the `.csv`
+  extension says. Comma-splitting breaks on the first name: "Camille Thibault, Dr".
+- **Four sections** headed `1. Summary`, `2. Participants`, `3. In-Meeting Activities`,
+  `4. Meeting Engagement`, separated by blank lines, with 2, 15, 6 and 3 columns. A
+  different column count is refused, not guessed around.
+- **No meeting ID anywhere.** The summary has title, participant count, start, end,
+  duration and average attendance. An upload is matched to an event on **meeting title
+  plus date**, and must overlap the event's scheduled hours.
+- **The date is ambiguous.** `9/10/26` is 10 September or 9 October and nothing in the
+  file says which. The parser never infers a locale: it reads the date whichever way
+  matches the event's known date, and fails loudly when neither does. Times are in the
+  organizer's local zone and are converted to UTC on the way in.
+- **Section 3 is the observation**: one row per join, not per person. Section 2's
+  "In-Meeting Duration" is Teams' own sum of that person's Section 3 rows with gaps
+  excluded (verified across all ten participants of the fixture, including a three-rejoin
+  case). Section 2 is used only as a **checksum**: a disagreement of more than one second
+  per row is recorded in `parse_warnings` and shown, never corrected. Teams does not
+  deduplicate someone connected on two devices at once, so interval merging still applies.
+- Display names carry suffixes like `(External)` and `(CUSM)`; stored verbatim. Durations
+  are human strings with whichever parts are non-zero (`3h 1m 41s`, `3h 26s`, `36m 6s`).
+  Email capitalization varies between rows; matching lowercases. Section 4 has quoted
+  fields with doubled quotes inside. Engagement columns are often empty.
+- **The Role column is a meeting permission**, not a statement about who presented, and
+  cannot be changed on the Teams side. It is stored as observed and never read.
 
-- The export has a header block above the actual table, and more than one section stacked
-  in the same sheet. You cannot hand the file to `read_excel` and expect a frame.
-- Timestamps come out in the organizer's locale. Parse to UTC on the way in, or you get a
-  quiet one-hour error at the November time change.
+Nothing is stored until the file has been parsed and checked against the event; a wrong
+file leaves no row and no file behind. Re-parsing a stored upload is still undesigned.
 
 Matching runs email first against `PersonEmail`, lowercasing `raw_email` at compare time.
 What falls through lands in the queue with a fuzzy name suggestion. Confirming writes a new
@@ -527,45 +548,54 @@ question is reworded.
 
 No stored credit total anywhere except an issued certificate.
 
-Credit is **earned per session and summed per event**. Each rule lives in its own
-function:
+There are **two kinds of credit, tracked and reported separately** even while both pay
+one credit per hour (`CREDIT_RATES_PER_HOUR`, a setting per kind). A blended figure
+cannot be split retroactively.
+
+- **Teaching**: for each session the person is in `SessionPresenter` for, the session's
+  full length. A presenter is by definition present for their own talk, so this is not
+  Teams minutes. Granted on presenting alone, with no evaluation gate (**provisional**,
+  pending McGill CPD). Presenter identity comes only from `SessionPresenter`.
+- **Attendance**: for every other session, the minutes attended, counted only once that
+  session has a complete evaluation. Time inside a session the person presented is
+  teaching, never attendance: no double-counting.
+
+Presenting one session and attending the other two of a three-hour event is 1 teaching +
+2 attendance. The organizer earns attendance like anyone else and still has to evaluate.
+Everyone in a Teams export is an attendee for credit purposes.
+
+Each rule lives in its own function:
 
 ```
 evaluation_gate(person, session)       -> bool     # a complete evaluation of THAT session
 creditable_time(person, event)         -> per session: minutes, source, attended,
-                                          evaluated, review reasons
-credits_for_minutes(minutes)           -> Decimal  # minutes / 60, to the hundredth
-computed_credits(person, event)        = min(credits_for_minutes(sum over sessions of
-                                                minutes attended, counted only if that
-                                                session passes the gate),
-                                             event.accredited_credits)
-event_credits(person, event)           = max(computed_credits + sum(adjustment deltas), 0)
+                                          evaluated, presented, review reasons
+credits_for_minutes(minutes, kind)     -> Decimal  # minutes / 60 * rate, to the hundredth
+attendance  = min(credits_for_minutes(sum of minutes in non-presented sessions that pass
+                  the gate), event.accredited_credits) + attendance adjustments, >= 0
+teaching    = credits_for_minutes(sum of presented session lengths)
+              + teaching adjustments, >= 0
 ```
 
 The gate is per session so that evaluating one talk cannot claim credit for three.
+`accredited_credits` caps attendance only: it is what the event is accredited for as an
+attended activity, and stays a field so an accrediting body can approve fewer credits
+than the clock says.
 
 Minutes count exactly as recorded, however few: five minutes of a talk is five minutes,
 once that talk's form is filled in. There is no minimum and no rounding up; 59 minutes of
-a 60-minute session is 59 minutes. The only softening is the grace at the ends of the
-event, which is real time that was spent connected.
+a 60-minute session is 59/60 of a credit, 0.98. The only rounding before issue is to two
+decimal places, downward, applied once per kind to the event's total minutes.
 
-**Credit is hours attended, not a quarter-step figure.** 59 minutes of a 60-minute talk
-is 59/60 of a credit, 0.98. The only rounding is to two decimal places, downward, applied
-once to the event's total minutes so a certificate's total is exactly the sum of its
-printed lines.
-
-`accredited_credits` stays a field rather than being computed from the sessions, so an
-accrediting body can approve fewer credits than the clock says.
-
-**Rounding happens at issue, not before.** Credit stays exact (to the hundredth) all
-year, in the admin and on the credits page. When the year-end certificate is generated,
-the year's exact credits are added up and the total is rounded once, to the nearest whole
-credit, halves up (`certificates.rules.certificate_total`). The lines keep their exact
-figures, so they do not always add up to the printed total; the certificate says so.
+**Rounding happens at issue, not before.** Credit stays exact all year. When the year-end
+certificate is generated, each kind's exact credits for the year are added up and rounded
+on their own to the nearest whole credit, halves up (`certificates.rules.certificate_total`);
+the printed total is the sum of the two rounded kinds. Lines keep their exact figures.
+`certificates.figures.certificate_figures` computes exactly what would print.
 
 Credit is a moving target: a reopened evaluation can earn credit after a certificate was
 issued. That is not an error. The person's admin page shows earned against certified
-credit per event, and the answer is a reissue, on request.
+credit per event and kind, and the answer is a reissue, on request.
 
 ### CreditAdjustment
 
@@ -574,6 +604,7 @@ credit per event, and the answer is a reissue, on request.
 | id | UUID pk | |
 | person | FK Person | |
 | event | FK RoundsEvent | |
+| kind | enum | attendance, teaching. Which kind this changes; never blended |
 | delta_credits | decimal | Can be negative. A ledger entry, not a total |
 | reason | text | Required |
 | created_by, created_at | FK User, timestamptz | |
@@ -593,7 +624,9 @@ because someone will file it with a college.
 | person | FK Person | |
 | certificate_type | enum | cme, attendance. Snapshot of what `role` implied at issue |
 | period_start, period_end | date | The accreditation year |
-| total_credits | decimal | Frozen at issue. The sum of the lines' exact `credits`, rounded to the nearest whole credit (`certificates.rules.certificate_total`) |
+| attendance_credits | decimal | Frozen at issue. The year's attendance credit, rounded on its own to a whole credit |
+| teaching_credits | decimal | Frozen at issue. The year's teaching credit, rounded on its own |
+| total_credits | decimal | `attendance_credits + teaching_credits` (check constraint). Both lines print, and the total; never one blended figure |
 | recipient_name | text | Snapshotted as typed. Names change |
 | recipient_credential | text | Snapshotted |
 | licence_number, licence_jurisdiction | text | Snapshotted, **as entered**, never the normalized form |
@@ -617,12 +650,15 @@ One line per **event**. Per-session credit does not exist.
 | event | FK RoundsEvent | For traceability only. Nothing printed is read through it |
 | event_title | text | Snapshotted |
 | event_date | date | Snapshotted |
-| session_titles | JSON array of text | The sessions attended (at least half of each), snapshotted. Print-only, never queried |
-| attended_minutes | int | Snapshotted. The number someone disputes |
+| session_titles | JSON array of text | The sessions attended (at least half of each, not presented), snapshotted. Print-only |
+| attended_minutes | int | Snapshotted. Minutes in sessions the person did not present |
 | minutes_source | enum | teams, manual, mixed, self_reported |
-| computed_credits | decimal | From the credit function |
-| adjustment_credits | decimal | Sum of `CreditAdjustment` deltas for this person and event |
-| credits | decimal | `max(computed + adjustment, 0)`. What the line prints |
+| attendance_computed | decimal | From the credit function |
+| attendance_adjustment | decimal | Sum of attendance `CreditAdjustment` deltas |
+| attendance_credits | decimal | `max(computed + adjustment, 0)` |
+| presented_session_titles | JSON array of text | The sessions presented, snapshotted |
+| teaching_minutes | int | Sum of presented session lengths |
+| teaching_computed, teaching_adjustment, teaching_credits | decimal | As for attendance |
 
 Unique on `(certificate, event)`.
 

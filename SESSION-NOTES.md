@@ -5,6 +5,208 @@ everything built in the first session: environment setup, the pre-build review, 
 the build order (models, migrations, admin, tests), and the per-session credit redesign.
 Step 2 has not been started. Nothing has been pushed; the repo has no remote.
 
+## Round three: the real export, and two kinds of credit
+
+Added after the Teams fixture arrived. 485 tests. Commits `d44e70b` (parser), `22fadc7`
+(credit split) and the docs commit after them. Also in this session, before the fixture:
+exact credit (minutes / 60), rounding only at issue, auto-filled session times and
+positions, the COI questionnaire, affiliation/employer, and the position-swap fix.
+
+### What was built
+
+- **`attendance/teams.py`**: a parser for the export as it actually is (see below), pure:
+  bytes in, a `ParsedExport` out, nothing written. `PARSER_VERSION = "teams-2026.1"` is
+  stamped on every row it produces.
+- **`attendance/services.py`**: `match_event` (title + date), `check_export_against_event`
+  (date, title, hours), `import_export` (one `AttendanceRecord` per Section 3 row, matched
+  by exact lowercased email, the rest to the queue), `upload_teams_export` (all of it in
+  one transaction: nothing is stored unless the file passes).
+- **Upload screen**: the file is parsed and checked as form validation, so a wrong file is
+  a red message, not a stored row. Leave the event blank and it is found by title and
+  date. Warnings from the parser are shown after import and kept on the upload.
+- **`RoundsEvent.teams_meeting_id` is now `teams_meeting_title`** (the thing that actually
+  exists). The seed sets it to "Health Informatics Rounds".
+- **`AttendanceUpload.parse_warnings`**, and `raw_participant_role` relabelled "Teams
+  meeting role" with help text saying it carries no meaning for credit.
+- **Credit split** into attendance and teaching: `credits/rules.py` rewritten around
+  `SessionCredit.presented`, `CreditAdjustment.kind`, `CREDIT_RATES_PER_HOUR`,
+  `Certificate.attendance_credits`/`teaching_credits` with `total_credits` constrained to
+  their sum, `CertificateLine` carrying both kinds, and `certificates/figures.py` computing
+  exactly what a certificate would print (issuing itself is still not built).
+- Event and person admin tables show both kinds; the evaluation reminder list skips a
+  session the person presented.
+
+### What the real export disagreed with
+
+Everything the docs and I assumed about the file, against what the fixture shows.
+
+1. **No meeting ID.** `data-model.md` said `teams_meeting_id` "lets an upload match an
+   event automatically". The summary has title, participant count, start, end, duration
+   and average attendance, nothing else. Matching is now title plus date.
+2. **Not a CSV.** `.csv` extension, but UTF-16 LE with a BOM, CRLF, tab-separated. My
+   `.gitignore` ignores `*.csv` except under `tests/fixtures/`, which is why the fixture
+   could be committed at all; the upload screen's "`.csv` or `.xlsx`" check is now only
+   an extension check and the parser decides.
+3. **Four sections, not "a header block above the table".** The docs described a header
+   and stacked sections; the file is four titled sections with 2, 15, 6 and 3 columns and
+   81 engagement rows we don't store.
+4. **The date is unparseable on its own.** `9/10/26` with nothing to say which number is
+   the month. The docs said "parse to UTC on the way in", as if the format were known. It
+   isn't; the only safe reading is against a date we already know, and the parser now
+   refuses rather than guesses.
+5. **Section 2's total is a derived number, not an observation.** "In-Meeting Duration"
+   equals the sum of that person's Section 3 rows with gaps excluded, for all ten people,
+   including Noémie's three rejoins (36m 6s + 1h 12m 45s + 51m 20s = 2h 40m 11s). That
+   is what makes it usable as a checksum and useless as a record.
+6. **Teams truncates each row to the second.** Our union of her three intervals is
+   9,612 s; Teams says 9,611. A checksum with zero tolerance would warn on every rejoin,
+   so the tolerance is one second per row. (I had not expected this; it fell out of the
+   checksum test.)
+7. **Seconds in Section 2 and whole-second truncation mean Teams' figure and ours will
+   never agree exactly for rejoiners.** Our figure, from the timestamps, is the one stored
+   and the one credited. That is a judgment: the timestamps are the observation; the
+   duration string is Teams' arithmetic on them.
+8. **Names carry commas and suffixes.** "Camille Thibault, Dr", "Thomas Dubois (CUSM)
+   (External)". The docs' "raw_display_name exactly as Teams wrote it" holds, but any
+   comma-splitting or title-casing would have corrupted them.
+9. **Email and UPN are two columns that happen to be equal**, and capitalization differs
+   between rows ("Thomas.Dubois@..." in both sections, lowercase for everyone else).
+   Stored as written; matched lowercased, which the docs already said.
+10. **The Role column is a permission.** Nine of ten people are "Presenter"; the tenth is
+    "Organizer". The docs listed it as "Organizer, Presenter, Attendee" as if it described
+    the agenda. It describes who may share a screen.
+11. **Durations are not one format.** `3h 1m 41s`, `3h 26s` (no minutes part), `36m 6s`.
+    A fixed-format parse would have failed on the second one.
+12. **Engagement columns are mostly empty.** In this file every Section 2 row still ends
+    with a value, so the "ragged trailing tabs" case (a row shorter than 15 columns) does
+    not actually occur in the fixture. The parser pads short rows anyway; see the mutation
+    note below.
+13. **The meeting ran 8:57 to 12:02 for a 9:00 to 12:00 event.** Early joins and a late
+    end are normal; the five minutes of grace at each end cover exactly this file. Anyone
+    who stayed to 12:02 gets two minutes past the last talk, within the grace.
+14. **Everyone joined before their talk and most stayed to the end.** Nobody in the file
+    is a clean "attended only the middle session" case; that case is tested with
+    synthetic data in `test_aggregation.py`, not with the fixture.
+
+### How I checked the parser can fail
+
+Same method as for `attended_minutes()`: break the code one way at a time, run the parser,
+credit-kind and certificate tests, and see whether anything notices. 21 mutations
+(`scripts` are not committed; the list is in this note):
+
+| Break | Caught by |
+| --- | --- |
+| split on commas instead of tabs | 25 tests |
+| always read the date month-first | the test that reads 9/10/26 as 9 October against an October event |
+| accept a date that matches neither reading | 3 tests, including "nothing is stored" |
+| drop the Section 2 checksum | 2 |
+| checksum with no per-row tolerance | the one-second test |
+| ignore the hours part of a duration | 10 |
+| forget PM | 10 (join times land in the morning) |
+| treat Teams times as UTC | 8 (every row shifts four hours) |
+| import Section 2 (per person) instead of Section 3 (per join) | 7, including the three-row rejoin |
+| match emails case-sensitively | 2 (Thomas.Dubois) |
+| skip the title check / the hours check | 1 each |
+| store the file before checking it | the "nothing is stored" test |
+| teaching from Teams minutes, not session length | 8 |
+| own talk also counted as attendance | 1 |
+| teaching gated by evaluation | 12 |
+| presenters asked to evaluate their own talk | 1 |
+| accreditation cap on the blended total | 1 |
+| Teams "Organizer" treated as a presenter | 3 (incl. a grep over the credit path) |
+| certificate rounds the blended total | 1 |
+| **stop padding short rows** | **0** |
+
+The last one is an equivalent mutant, not a gap: the parser only ever reads columns 0 to
+6 of Section 2, so padding the empty engagement columns changes nothing observable. The
+padding stays as a guard for a future column read; the test for it can only check that a
+short row is accepted, which it does.
+
+Several entries were caught by only one test. That is deliberate for the date, title and
+hours checks (each has exactly one test), and acceptable; it does mean each of those tests
+is load-bearing.
+
+### What a second export would likely break
+
+I have parsed one file from one meeting on one tenant. Where I would expect trouble:
+
+1. **Locale.** The organizer's locale decides the date order, the AM/PM marker, and
+   possibly the decimal and the section titles. A French-locale export could write
+   `10/09/26 08:57:52`, `3 h 1 min 41 s`, and `1. Résumé`. The date order is handled by
+   design; the rest would be refused with a clear message, which is the right failure but
+   still a failure. **I want to see an export from a French-locale organizer before
+   trusting this on another machine.**
+2. **Column changes.** Teams has added engagement columns before. A 16-column Section 2
+   is refused outright. Better to refuse than to read the wrong column as the email, but
+   it means the first format change stops uploads until the parser is updated.
+3. **Section 4 absent or renamed.** Treated as optional. Sections 1 to 3 are required by
+   title; a renamed section title ("Activities" instead of "In-Meeting Activities") is a
+   refusal.
+4. **A meeting that spans midnight, or the November time change.** Times resolve through
+   `America/Montreal`; a join at 1:30 AM on the fall-back night is ambiguous and
+   `zoneinfo` will pick one. Rounds is at noon, so this is theoretical.
+5. **A date where day equals month** (e.g. 10/10/26). Both readings match; the parser
+   takes the first, which is fine because they are the same date.
+6. **An event whose Teams title has changed mid-year**, or a title with a typo in the
+   admin. Matching is exact after whitespace and case folding; a changed title is a
+   refusal with the two titles shown. That is the intended behaviour, but it will happen.
+7. **Two events on one date with the same title** (a morning and an afternoon rounds).
+   `match_event` refuses and asks for the event; choosing it on the form works, since the
+   hours check then separates them.
+8. **Someone in Section 3 under an email not in Section 2, or vice versa.** Reported as a
+   warning, not seen in this file.
+9. **Participants with no email at all** (dial-in by phone shows a number as the name and
+   nothing in the email column). Handled as unmatched rows with the name as written; not
+   present in this file, so untested against real data.
+10. **A very large file.** The whole file is read into memory twice (once to hash, once to
+    parse). At 16 KB for ten people that is nothing; at a thousand participants it is
+    still nothing, but I have not measured.
+11. **Re-uploading after a parser fix.** Still undesigned; `import_export` refuses an
+    upload that was already parsed.
+
+### Decisions this round that your message did not settle
+
+1. **Checksum tolerance is one second per row**, for the truncation reason above.
+2. **Section 2 and Section 3 are keyed on lowercased email, falling back to the cleaned
+   display name**, for the checksum only. Importing matches on email alone.
+3. **The hours check uses overlap, not containment**: the meeting must overlap the event's
+   scheduled window. A meeting that started at 8:57 for a 9:00 event passes; one at 5 PM
+   does not.
+4. **`match_event` tries both date readings** and refuses if they point at two different
+   events. Choosing the event on the form resolves it.
+5. **Section 4 (engagement) is parsed but not stored.** Its row count is kept so a
+   malformed section is noticed. Storing reactions is not in any doc.
+6. **Teaching minutes for a co-presented session are the whole session for each
+   co-presenter.** Nothing said to split it; a talk given by two people was given by both.
+7. **The accreditation cap applies to attendance only.** `accredited_credits` is what the
+   event is accredited for as an attended activity; capping teaching with it would make a
+   presenter who also attended lose credit for presenting.
+8. **A presenter's own talk raises no review flags**, even if they also filled in an
+   evaluation for it with a larger number. Their minutes there are not used.
+9. **`presented_session_titles` and `session_titles` are separate lists on the line**,
+   so the certificate can print "attended: A, C; presented: B".
+10. **Each kind is rounded on its own at issue, and the total is their sum.** The
+    alternative (round the blended total) makes the three printed figures not add up.
+11. **Migration converted existing certificate totals to attendance credit** and set
+    teaching to zero. There are no real certificates yet.
+
+### Deviations
+
+- The upload screen's old "`.csv` or `.xlsx`" filter is kept only as a cheap first check;
+  `.xlsx` will be refused by the parser as not a Teams export. The docs said Teams exports
+  arrive as either; this one is a tab-separated text file with a `.csv` name, and I have
+  no `.xlsx` example to parse.
+- `scripts/` is committed with the anonymizer, as you added it. It is not run by anything.
+
+### Unsure
+
+- Whether an export from the same tenant but a different organizer has the same shape.
+- Whether to store engagement rows; `is_complete` for evaluations might one day be
+  computed from "unmuted" events, but nobody has asked.
+- The relabelled Role column still reads "Presenter" in the review queue next to real
+  presenters. The label and help text are there; a column that said "screen-share" might
+  be clearer still.
+
 ## How to run it
 
 ```powershell
@@ -17,7 +219,7 @@ Then open http://127.0.0.1:8000/admin/ and sign in with `DJANGO_SUPERUSER_USERNA
 redesign and holds the new seed data.
 
 ```powershell
-python -m pytest          # 381 tests, about 90 seconds
+python -m pytest          # 485 tests, under two minutes
 python manage.py seed_demo  # only fills an empty database; this one is already seeded
 ```
 

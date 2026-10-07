@@ -135,6 +135,46 @@ filled in. Validity is a rolling year from the declaration rather than a fixed 3
 a presenter who declares in May should not have to declare again in July. The first
 question set is provisional pending McGill CPD; adding a version is a settings change.
 
+**Uploads are matched to events on Teams meeting title plus date. There is no meeting ID.**
+The real export has none; the summary holds only title, counts and times. `RoundsEvent`
+carries `teams_meeting_title` for the match. The meeting must also overlap the event's
+scheduled hours.
+
+**The export's date is never guessed.** `9/10/26` could be 10 September or 9 October and
+the file does not say. The parser reads it whichever way matches the event's known date
+and refuses the file when neither reading does, rather than inferring a locale that would
+be silently wrong twelve days a year.
+
+**Section 3 is the record; Section 2 is a checksum.** Teams' per-person "In-Meeting
+Duration" was verified, across all ten participants of a real export including a
+three-rejoin case, to be the sum of that person's Section 3 rows with gaps excluded. One
+row per join is what gets stored; a disagreement with Teams' own total is a warning on the
+upload, never a correction. Teams does not deduplicate two devices at once, so interval
+merging still applies.
+
+**The Teams Role column means nothing.** It is a meeting permission (everyone gets
+Presenter so they can share a screen) and cannot be changed on the Teams side. It is
+stored as observed, labelled "Teams meeting role" in the admin, and nothing in the credit
+path reads it; a test asserts credit is identical whatever it contains. Presenter identity
+comes only from `SessionPresenter`.
+
+**Teaching and attendance are different kinds of credit.**
+Both pay a credit an hour today (a setting per kind), but they are tracked and reported
+separately all the way to the certificate, because a blended figure cannot be split
+retroactively and reissuing every certificate later is what this project avoids. Teaching
+is the full length of each session the person presented, not their Teams minutes: a
+presenter is by definition present for their own talk. Time in a session they presented is
+never also attendance. The accreditation cap applies to attendance only. The organizer is
+an attendee like anyone else.
+
+**Teaching credit has no evaluation gate (provisional).**
+A presenter should not have to evaluate their own talk; presenting is enough. The
+attendance gate is unchanged. Pending confirmation with McGill CPD.
+
+**The certificate rounds each kind on its own.**
+The year's attendance and teaching credits are each rounded to the nearest whole credit,
+and the printed total is their sum, so the three printed figures always add up.
+
 **Hours-only manual rows name a session.**
 A row with minutes but no times has to say which talk the minutes belong to, or they could
 not be credited to one. Timed rows are matched to sessions by their times.
