@@ -13,6 +13,7 @@ from signin.views import signed_in
 
 from .evaluation_forms import (
     Kind,
+    remaining,
     rendered_questions,
     resolve_form,
     response_for,
@@ -53,12 +54,10 @@ def _posted_answers(request, questions):
 
 
 def _validate(questions, answers):
+    """Only the shape of what was given; what is missing is the draft's business."""
     errors = {}
     for q in questions:
         value = answers.get(q.field_name)
-        if q.required and (value is None or value == "" or value == []):
-            errors[q.field_name] = "This question is required."
-            continue
         if value in (None, "", []):
             continue
         valid = [str(v) for v, _ in q.options]
@@ -68,6 +67,13 @@ def _validate(questions, answers):
         elif q.options and str(value) not in valid:
             errors[q.field_name] = "Choose from the options given."
     return errors
+
+
+def _left(submission):
+    """What a draft still needs, as (fields, count) for the page."""
+    items = remaining(submission)
+    fields = {(x if isinstance(x, str) else x.field_name) for x in items}
+    return fields, len(items)
 
 
 @public_object(
@@ -117,37 +123,38 @@ def evaluate(request, session_id):
     if request.method == "GET":
         context["answers"] = _current_answers(submission, questions)
         context["minutes"] = submission.self_reported_session_minutes if submission else None
-        context["attested"] = submission is not None
+        context["attested"] = submission is not None and submission.attestation
+        if submission is not None:
+            context["left_fields"], context["left"] = _left(submission)
         return render(request, "credits/evaluate.html", context)
 
+    # Any POST saves what was given as a draft; "submit" also points at what is missing.
     answers = _posted_answers(request, questions)
     errors = _validate(questions, answers)
     minutes = request.POST.get("minutes", "").strip()
-    if not minutes.isdigit() or not (0 <= int(minutes) <= session.length_minutes):
+    if minutes and not (minutes.isdigit() and 0 <= int(minutes) <= session.length_minutes):
         errors["minutes"] = f"Whole minutes between 0 and {session.length_minutes}."
-    if not request.POST.get("attestation"):
-        errors["attestation"] = "Please confirm the minutes are accurate."
-    context.update({"answers": answers, "minutes": minutes, "attested": bool(request.POST.get("attestation"))})
+    attested = bool(request.POST.get("attestation"))
+    context.update({"answers": answers, "minutes": minutes, "attested": attested})
     if errors:
         context["errors"] = errors
         return render(request, "credits/evaluate.html", context, status=400)
 
     with transaction.atomic():
         if submission is None:
-            submission = EvaluationSubmission(
-                person=person,
-                session=session,
-                form_version=version,
-                self_reported_session_minutes=int(minutes),
-                attestation=True,
-            )
+            submission = EvaluationSubmission(person=person, session=session, form_version=version)
             submission.full_clean()
             submission.save()
-        else:
-            submission.self_reported_session_minutes = int(minutes)
-            submission.save()
+        submission.self_reported_session_minutes = int(minutes) if minutes else None
+        submission.attestation = attested
+        submission.save()
         for q in questions:
             store_answer(submission, q, answers.get(q.field_name))
     submission.refresh_from_db()
     context.update({"submission": submission, "errors": {}})
+    context["answers"] = _current_answers(submission, questions)
+    if not submission.is_complete:
+        context["left_fields"], context["left"] = _left(submission)
+        context["submitted"] = request.POST.get("action") == "submit"
+        context["saved"] = True
     return render(request, "credits/evaluate.html", context)

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load dicts %}
 {% block title %}My credits{% endblock %}
 {% block content %}
 <h1>{{ person.full_name }}</h1>
@@ -15,8 +16,9 @@
       <td>{{ session.title }}</td>
       <td>
         {% if state == STATE_OPEN or state == STATE_REOPENED %}
-          <a href="{% url 'credits:evaluate' session.pk %}">Evaluate this talk</a>{% if state == STATE_REOPENED %} <span class="muted">(reopened)</span>{% endif %}
+          <a href="{% url 'credits:evaluate' session.pk %}">{% if session.pk in drafts %}Finish your evaluation{% else %}Evaluate this talk{% endif %}</a>{% if session.pk in drafts %} <span class="pending">in progress, {{ drafts|get_item:session.pk }} left</span>{% endif %}{% if state == STATE_REOPENED %} <span class="muted">(reopened)</span>{% endif %}
         {% elif state == STATE_CAN_REQUEST %}
+          {% if session.pk in drafts %}<span class="pending">Draft saved, {{ drafts|get_item:session.pk }} left; the window has closed.</span> {% endif %}
           <form method="post" action="{% url 'signin:reopen' %}">{% csrf_token %}
             <input type="hidden" name="session" value="{{ session.pk }}">
             <button type="submit" class="quiet">Request another week</button>

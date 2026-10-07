@@ -1,8 +1,13 @@
 {% load dicts %}
-{# One block per rendered question. Context: questions, answers (field_name -> value), errors (field_name -> text), readonly #}
+{# One block per rendered question. Context: questions, answers (field_name -> value), errors, left_fields, readonly #}
 {% for q in questions %}
-<div class="question{% if q.field_name in errors %} error{% endif %}">
-  <p><strong>{{ forloop.counter }}. {{ q.prompt }}</strong>{% if q.required %} <span class="muted">(required)</span>{% endif %}</p>
+<div class="question{% if q.field_name in errors %} error{% endif %}"
+     data-field="{{ q.field_name }}"{% if q.condition %} data-required-when="q_{{ q.condition.0 }}" data-required-value="{{ q.condition.1 }}"{% endif %}>
+  <p><strong>{{ forloop.counter }}. {{ q.prompt }}</strong>
+    {% if q.required %}<span class="muted">(required)</span>
+    {% elif q.condition %}<span class="muted required-note">(required if the answer above is {{ q.condition.1|yesno_label:q.condition.0 }})</span>
+    {% else %}<span class="muted">(optional)</span>{% endif %}
+    {% if q.field_name in left_fields %}<span class="error">still needed</span>{% endif %}</p>
   {% if q.question.help_text %}<p class="muted">{{ q.question.help_text }}</p>{% endif %}
   {% with current=answers|get_item:q.field_name %}
   {% if q.kind == "likert_5" or q.kind == "yes_no" or q.kind == "single_choice" %}
@@ -23,3 +28,32 @@
 {% empty %}
 <p class="muted">This form has no questions.</p>
 {% endfor %}
+{% if not readonly %}
+<script>
+  // Conditional questions: shown and marked required as soon as the trigger
+  // is answered with the triggering value; hidden otherwise. The server
+  // applies the same rule to what is stored, so this is a courtesy, not a gate.
+  (function () {
+    var blocks = document.querySelectorAll("[data-required-when]");
+    function update(block) {
+      var trigger = block.getAttribute("data-required-when");
+      var want = block.getAttribute("data-required-value");
+      var inputs = document.querySelectorAll('[name="' + trigger + '"]');
+      var holds = false;
+      inputs.forEach(function (i) {
+        if ((i.type === "radio" || i.type === "checkbox") ? (i.checked && i.value === want) : (i.value === want)) holds = true;
+      });
+      block.style.display = holds ? "" : "none";
+      block.querySelectorAll("textarea, input").forEach(function (i) { i.required = holds; });
+      var note = block.querySelector(".required-note");
+      if (note) note.textContent = holds ? "(required)" : "";
+    }
+    blocks.forEach(function (block) {
+      update(block);
+      document.querySelectorAll('[name="' + block.getAttribute("data-required-when") + '"]').forEach(function (i) {
+        i.addEventListener("change", function () { update(block); });
+      });
+    });
+  })();
+</script>
+{% endif %}

@@ -103,6 +103,21 @@ listed). Nothing pushed.
   page; the event and session forms have the FK. Attendee form at `/evaluate/<session>/`
   (stable, for the step-5 email), linked from `/me/`. Eighteen tests in
   `credits/tests/test_evaluation_forms.py`, including the four you listed.
+- **Conditional requirement and drafts** (your two messages on evaluations; the "revise
+  the mandatory rule" one read as the later of the two and won). `EvaluationQuestion.required`
+  is derived from the kind (Likert, yes/no, choice, per-objective mandatory; free text
+  optional); `required_when` on a free-text question names a trigger key and value,
+  validated against the same version. `remaining(submission)` is the one function that
+  says what is still needed: it drives `is_complete`, the page's "still needed" marks,
+  and the count on the credits page. The page shows and marks a conditional question as
+  soon as its trigger is answered (inline script, progressive: without it the question
+  is visible with "(required if ...)"). Any POST saves a draft; "Submit" marks what is
+  missing, "Save and finish later" just says saved. The credits page shows "in progress,
+  N left" and, once the window has closed, "Draft saved, N left; the window has closed".
+  Two schema consequences: `self_reported_session_minutes` nullable and `attestation`
+  defaulting to false, with a check constraint that a complete submission is attested
+  with minutes (migration `credits.0008`). Demo re-seeded (flush, seed, superuser from
+  `.env`): 22 of 23 evaluations complete, credits show. Twenty-three tests now.
 - **"Import paper sign-in sheet"** on the event page. Lists the program's known people
   (anyone who attended, evaluated or presented at one of its events) with a checkbox per
   session, five blank lines for names not on the list, and a Record button. A tick is a
@@ -152,6 +167,10 @@ listed). Nothing pushed.
   worse than one that works: the view checks the window, validates required questions,
   writes the submission against the resolved version, and shows a complete one read-only
   with its own wording. The email that links to it is still step 5.
+- **Re-seeded rather than remapped.** `objective_met` maps cleanly to `objectives_met`,
+  but `overall` is not `relevance`, and no old row answered `commercial_bias`; a remap
+  would still have read as incomplete, or would have invented answers. Production has
+  no submissions, so the migration that points old rows at v1 stays as it is.
 - **A migration points existing submissions at the standard form's v1.** Their responses
   predate templates (keys `objective_met`, `overall`), so they read as incomplete under v1
   until re-answered. In the dev database that is seed data only; a real deployment has no

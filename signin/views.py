@@ -151,6 +151,13 @@ def sign_out_everywhere(request):
 def me(request):
     from credits.reports import person_standing_by_program
 
+    from credits.evaluation_forms import remaining
+    from credits.models import EvaluationSubmission
+
+    drafts = {
+        s.session_id: len(remaining(s))
+        for s in EvaluationSubmission.objects.filter(person=request.person, is_complete=False)
+    }
     programs = person_standing_by_program(request.person)
     to_evaluate = []
     for program in programs:
@@ -162,6 +169,7 @@ def me(request):
         "signin/me.html",
         {
             "person": request.person,
+            "drafts": drafts,
             "programs": programs,
             "to_evaluate": to_evaluate,
             "STATE_OPEN": STATE_OPEN,

@@ -769,10 +769,17 @@ Credit needs two things: the person was there, and they completed the evaluation
 | person | FK Person | From the signed-in session, never typed |
 | session | FK Session | One submission per lecture attended |
 | submitted_at | timestamptz | |
-| self_reported_session_minutes | smallint | How long they say they attended this lecture |
-| attestation | bool | They confirm the minutes are accurate. Required |
+| self_reported_session_minutes | smallint, nullable | How long they say they attended this lecture. Blank on a draft |
+| attestation | bool | They confirm the minutes are accurate. False on a draft; part of what makes a submission complete |
 | form_version | FK EvaluationFormVersion | The questions as worded when this was answered. Never re-pointed |
-| is_complete | bool, cache | Every required question of `form_version`, expanded for the session, has an answer. Recomputed from the responses on every save of the submission or a response; not editable |
+| is_complete | bool, cache | Every question required right now has an answer, and minutes and attestation are given. Recomputed from the responses on every save of the submission or a response; not editable. Check constraint: complete implies attested with minutes |
+
+**Drafts.** A submission row exists from the first answer saved; it is a draft until
+complete. The attendee can answer some questions, leave, and come back to find them
+saved; the credits page lists a draft as in progress with a count of what is left. A
+draft earns nothing: the credit gate is `is_complete`, unchanged. A draft survives its
+window expiring, but completing it needs an open or reopened window: the draft is not
+the claim, the completed submission is.
 
 Unique on `(person, session)`. A submission is accepted only while a window is open for
 that person and session (below). Saving a complete submission closes any reopened window.
@@ -862,8 +869,17 @@ submission. A version with no submissions is edited in place: nothing answered i
 | position | smallint | Blank takes the next number |
 | prompt, help_text | text | |
 | kind | enum | likert_5, yes_no, single_choice, multi_choice, free_text, per_objective |
-| required | bool | |
+| required | bool, derived | Set from the kind on save: Likert, yes/no, choice and per-objective questions are mandatory; free text is optional |
+| required_when | jsonb, nullable | `{"question_key": ..., "value": ...}`: a free-text question required only while another question (Likert, yes/no or choice, in the same version) has that answer |
 | choices | jsonb | The options, for the two choice kinds |
+
+**What complete means** (`credits/evaluation_forms.py: remaining`): every
+unconditionally required question answered, plus every conditionally required question
+whose trigger currently holds, plus minutes and attestation. A conditional question whose
+condition does not hold is not required and its absence blocks nothing. The page shows
+and marks a conditional question as soon as its trigger is answered (a few inline lines
+of script); the server applies the same rule to what is stored, so bypassing the page
+leaves a draft, never a completion.
 
 `per_objective` expands at render time into one Likert question per `LearningObjective`
 of the session, `{objective}` in the prompt replaced by the objective's text; the

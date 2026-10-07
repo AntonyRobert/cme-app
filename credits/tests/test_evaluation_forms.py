@@ -236,9 +236,12 @@ def test_an_empty_free_text_is_not_an_answer():
     [bias] = [q for q in rendered_questions(submission.form_version, session) if q.key == "commercial_bias"]
     store_answer(submission, bias, 0)
     [detail] = [q for q in rendered_questions(submission.form_version, session) if q.key == "bias_detail"]
-    assert store_answer(submission, detail, "   ") is None
+    assert store_answer(submission, detail, "   ") is None  # blank leaves no row
     submission.refresh_from_db()
-    assert submission.is_complete  # bias_detail is optional; blank leaves no row
+    assert not submission.is_complete  # "no" to bias makes the detail required
+    store_answer(submission, bias, 1)
+    submission.refresh_from_db()
+    assert submission.is_complete  # "yes": the detail is optional again
 
 
 # --- The attendee form at its stable URL ------------------------------------------------------
@@ -284,11 +287,15 @@ def test_the_form_renders_and_a_complete_submission_is_recorded_against_the_vers
     assert "This session met the stated objective: Apply Y" in html
     assert "(required)" in html
 
-    # A required question missing: nothing is stored.
-    refused = client.post(evaluate_url(session), {"q_relevance": "4", "minutes": "60", "attestation": "1"})
-    assert refused.status_code == 400
-    assert "This question is required." in refused.content.decode()
-    assert not EvaluationSubmission.objects.filter(person=ada).exists()
+    # Required questions missing: saved as a draft that says what is left.
+    partial = client.post(
+        evaluate_url(session), {"q_relevance": "4", "minutes": "60", "attestation": "1", "action": "submit"}
+    )
+    assert partial.status_code == 200
+    html = partial.content.decode()
+    assert "draft" in html and "3 thing(s) still needed" in html  # two objectives and the bias question
+    draft = EvaluationSubmission.objects.get(person=ada, session=session)
+    assert not draft.is_complete and draft.responses.count() == 1
 
     done = client.post(
         evaluate_url(session),
@@ -445,3 +452,133 @@ def test_the_standard_form_is_seeded_for_every_program_and_attached_as_default()
     ]
     assert create_standard_form(program) == form  # idempotent
     assert form.name == STANDARD_FORM_NAME
+
+
+# --- Conditional requirement and drafts -------------------------------------------------------
+
+
+def test_required_when_satisfied_and_unsatisfied():
+    """bias_detail is required only while commercial_bias is answered no."""
+    program = make_program("Conditional")
+    create_standard_form(program)
+    event = make_event(program=program, sessions=0)
+    session = make_session(event, minutes=60)
+    submission = evaluate(make_person(), session, complete=False)
+    qs = {q.key: q for q in rendered_questions(submission.form_version, session)}
+    store_answer(submission, qs["relevance"], 4)
+    store_answer(submission, qs["commercial_bias"], 1)
+    submission.refresh_from_db()
+    assert submission.is_complete  # yes: the detail is not required
+    assert qs["bias_detail"].condition == ("commercial_bias", 0)
+
+    store_answer(submission, qs["commercial_bias"], 0)
+    submission.refresh_from_db()
+    assert not submission.is_complete  # no: now it is
+    from credits.evaluation_forms import remaining
+
+    assert [x.key for x in remaining(submission)] == ["bias_detail"]
+    store_answer(submission, qs["bias_detail"], "A product was named twice.")
+    submission.refresh_from_db()
+    assert submission.is_complete
+
+
+def test_required_is_derived_from_the_kind_and_only_free_text_can_be_conditional():
+    program = make_program("Kinds")
+    form = create_standard_form(program)
+    version = form.current_version
+    assert [q.required for q in version.questions.order_by("position")] == [True, True, True, False, False, False]
+    likert = version.questions.get(question_key="relevance")
+    likert.required_when = {"question_key": "commercial_bias", "value": 0}
+    with pytest.raises(ValidationError):
+        likert.full_clean()
+    text = version.questions.get(question_key="comments")
+    for bad in ({"question_key": "nope", "value": 0}, {"question_key": "comments", "value": 0},
+                {"question_key": "bias_detail", "value": "x"}, {"value": 0}):
+        text.required_when = bad
+        with pytest.raises(ValidationError):
+            text.full_clean()
+
+
+def test_the_server_rejects_a_completion_the_client_would_have_allowed(ada):
+    """Bypassing the page's script and posting 'no' with no detail leaves a draft, not a completion."""
+    program = make_program("Bypass")
+    create_standard_form(program)
+    session = open_session(program)
+    client = signed_in_client("ada@mcgill.ca")
+    response = client.post(
+        evaluate_url(session),
+        {"q_relevance": "5", "q_commercial_bias": "0", "minutes": "60", "attestation": "1", "action": "submit"},
+    )
+    assert response.status_code == 200
+    html = response.content.decode()
+    submission = EvaluationSubmission.objects.get(person=ada, session=session)
+    assert not submission.is_complete
+    assert "1 thing(s) still needed" in html and 'data-required-when="q_commercial_bias"' in html
+    # Answering it completes; answering "yes" instead would have, too.
+    done = client.post(
+        evaluate_url(session),
+        {"q_relevance": "5", "q_commercial_bias": "0", "q_bias_detail": "Two slides were an advert.",
+         "minutes": "60", "attestation": "1", "action": "submit"},
+    )
+    assert "your evaluation is complete" in done.content.decode()
+
+
+def test_a_draft_survives_the_window_expiring_and_completes_in_a_reopened_one(ada, monkeypatch):
+    from credits.windows import request_reopening
+
+    program = make_program("Drafts")
+    create_standard_form(program)
+    session = open_session(program)
+    client = signed_in_client("ada@mcgill.ca")
+    saved = client.post(evaluate_url(session), {"q_relevance": "4", "action": "save"})
+    assert saved.status_code == 200 and "Saved." in saved.content.decode()
+    draft = EvaluationSubmission.objects.get(person=ada, session=session)
+    assert not draft.is_complete and draft.self_reported_session_minutes is None and not draft.attestation
+
+    # The credits page shows it in progress with what is left.
+    from attendance.tests.factories import teams_row
+
+    teams_row(session.event, ada, session.start_at, session.end_at)
+    me = client.get(reverse("signin:me")).content.decode()
+    assert "Finish your evaluation" in me and "in progress, 3 left" in me  # bias, minutes, attestation
+
+    # A month on: the window is gone, the draft is not.
+    later = timezone.now() + datetime.timedelta(days=30)
+    monkeypatch.setattr("django.utils.timezone.now", lambda: later)
+    page = client.get(evaluate_url(session))
+    assert "window for this session has closed" in page.content.decode()
+    draft.refresh_from_db()
+    assert draft.responses.count() == 1
+    refused = client.post(evaluate_url(session), {"q_relevance": "4", "q_commercial_bias": "1",
+                                                   "minutes": "60", "attestation": "1", "action": "submit"})
+    assert "window for this session has closed" in refused.content.decode()
+    draft.refresh_from_db()
+    assert not draft.is_complete
+    me = client.get(reverse("signin:me")).content.decode()
+    assert "Draft saved, 3 left; the window has closed." in me
+
+    # Reopened: the same draft completes.
+    request_reopening(ada, session, reason="Was away")
+    done = client.post(evaluate_url(session), {"q_relevance": "4", "q_commercial_bias": "1",
+                                                "minutes": "60", "attestation": "1", "action": "submit"})
+    assert "your evaluation is complete" in done.content.decode()
+    draft.refresh_from_db()
+    assert draft.is_complete and EvaluationSubmission.objects.filter(person=ada, session=session).count() == 1
+
+
+def test_credit_appears_only_when_the_draft_is_complete(ada):
+    from decimal import Decimal
+
+    from attendance.tests.factories import teams_row
+    from credits.rules import credit_breakdown
+
+    program = make_program("Credit")
+    create_standard_form(program)
+    session = open_session(program)
+    teams_row(session.event, ada, session.start_at, session.end_at)
+    client = signed_in_client("ada@mcgill.ca")
+    client.post(evaluate_url(session), {"q_relevance": "4", "minutes": "60", "attestation": "1", "action": "save"})
+    assert credit_breakdown(ada, session.event).attendance_credits == Decimal("0.00")
+    client.post(evaluate_url(session), {"q_relevance": "4", "q_commercial_bias": "1",
+                                        "minutes": "60", "attestation": "1", "action": "submit"})
+    assert credit_breakdown(ada, session.event).attendance_credits == Decimal("1.00")

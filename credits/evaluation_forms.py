@@ -49,6 +49,7 @@ STANDARD_QUESTIONS = [
         "question_key": "bias_detail",
         "kind": Kind.FREE_TEXT,
         "required": False,
+        "required_when": {"question_key": "commercial_bias", "value": 0},
         "prompt": "If you answered no, please explain",
     },
     {
@@ -134,7 +135,25 @@ class RenderedQuestion:
 
     @property
     def required(self):
+        """Unconditionally required (Likert and choice questions)."""
         return self.question.required
+
+    @property
+    def condition(self):
+        return self.question.condition
+
+    def required_given(self, answers):
+        """
+        Required right now: unconditionally, or because the trigger question
+        has the triggering answer. `answers` maps field name to the current
+        value (an int rating, a string, or a list for several choices).
+        """
+        if self.required:
+            return True
+        if self.condition is None:
+            return False
+        key, value = self.condition
+        return answer_matches(answers.get(f"q_{key}"), value)
 
     @property
     def options(self):
@@ -159,6 +178,29 @@ def rendered_questions(version, session):
     return out
 
 
+def answer_matches(answer, value):
+    """Does an answer (rating, text, list of choices) equal or contain the trigger value?"""
+    if answer is None or answer == "" or answer == []:
+        return False
+    if isinstance(answer, list):
+        return str(value) in [str(a) for a in answer]
+    return str(answer) == str(value)
+
+
+def answers_of(submission):
+    """{field name: value} from a submission's responses, the shape the views and rules use."""
+    answers = {}
+    for r in submission.responses.all():
+        key = f"q_{r.question_key}" + (f"_{r.objective_id}" if r.objective_id else "")
+        if r.rating is not None:
+            answers[key] = r.rating
+        elif r.selected:
+            answers[key] = r.selected
+        elif r.free_text:
+            answers[key] = r.free_text
+    return answers
+
+
 def response_for(rendered, responses):
     """The stored response for a rendered question, from {(key, objective id): response}."""
     return responses.get((rendered.key, rendered.objective.pk if rendered.objective else None))
@@ -168,20 +210,37 @@ def responses_by_question(submission):
     return {(r.question_key, r.objective_id): r for r in submission.responses.all()}
 
 
-def compute_is_complete(submission):
+def remaining(submission):
     """
-    Complete when every REQUIRED question of the submission's version,
-    expanded for its session, has an answer. Optional questions do not
-    count either way. The responses are the truth; the flag is a cache.
+    What still stands between this submission and complete: the rendered
+    questions required right now (unconditionally, or whose condition holds
+    given the answers so far) that have no answer, plus "minutes" and
+    "attestation" when those are missing. Empty means complete.
     """
     responses = responses_by_question(submission)
+    answers = answers_of(submission)
+    missing = []
     for rendered in rendered_questions(submission.form_version, submission.session):
-        if not rendered.required:
+        if not rendered.required_given(answers):
             continue
         response = response_for(rendered, responses)
         if response is None or not response.answered:
-            return False
-    return True
+            missing.append(rendered)
+    if submission.self_reported_session_minutes is None:
+        missing.append("minutes")
+    if not submission.attestation:
+        missing.append("attestation")
+    return missing
+
+
+def compute_is_complete(submission):
+    """
+    Complete when every question required right now has an answer, and the
+    minutes and attestation are given. A conditionally required question
+    whose condition does not hold is not required, and its absence blocks
+    nothing. The responses are the truth; the flag is a cache.
+    """
+    return not remaining(submission)
 
 
 def store_answer(submission, rendered, value):

@@ -135,7 +135,16 @@ class EvaluationQuestion(UUIDModel):
     prompt = models.TextField()
     help_text = models.CharField(max_length=300, blank=True)
     kind = models.CharField(max_length=20, choices=Kind.choices)
-    required = models.BooleanField(default=True)
+    # Derived from the kind on save (rules.required_for_kind): Likert and
+    # choice questions are mandatory, free text is optional unless a
+    # condition makes it required.
+    required = models.BooleanField(default=True, editable=False)
+    required_when = models.JSONField(
+        null=True,
+        blank=True,
+        help_text='Required only when another question has a given answer: '
+        '{"question_key": "commercial_bias", "value": 0}. Free-text questions only.',
+    )
     choices = models.JSONField(
         default=list, blank=True, help_text="The options, one per line, for choice questions."
     )
@@ -158,6 +167,13 @@ class EvaluationQuestion(UUIDModel):
     def __str__(self):
         return f"{self.position}. {self.question_key}"
 
+    @property
+    def condition(self):
+        """(trigger question key, value) or None."""
+        if not self.required_when:
+            return None
+        return self.required_when.get("question_key"), self.required_when.get("value")
+
     def clean(self):
         super().clean()
         errors = {}
@@ -167,6 +183,8 @@ class EvaluationQuestion(UUIDModel):
             errors["choices"] = "Only choice questions have options."
         if self.kind == self.Kind.PER_OBJECTIVE and "{objective}" not in self.prompt:
             errors["prompt"] = "A per-objective prompt names where the objective goes: {objective}."
+        if self.required_when:
+            errors.update(self._condition_errors())
         if self.version_id and self.version.is_locked:
             errors["__all__"] = (
                 "This version has submissions and is locked. Create a new version of the form."
@@ -174,7 +192,25 @@ class EvaluationQuestion(UUIDModel):
         if errors:
             raise ValidationError(errors)
 
+    def _condition_errors(self):
+        if self.kind != self.Kind.FREE_TEXT:
+            return {"required_when": "Only a free-text question can be conditionally required; the others always are."}
+        if not isinstance(self.required_when, dict) or "question_key" not in self.required_when or "value" not in self.required_when:
+            return {"required_when": 'Give {"question_key": ..., "value": ...}.'}
+        key = self.required_when["question_key"]
+        if key == self.question_key:
+            return {"required_when": "A question cannot depend on itself."}
+        trigger = None
+        if self.version_id:
+            trigger = EvaluationQuestion.objects.filter(version_id=self.version_id, question_key=key).first()
+        if trigger is None:
+            return {"required_when": f"No question {key!r} in this version."}
+        if trigger.kind in (self.Kind.FREE_TEXT, self.Kind.PER_OBJECTIVE):
+            return {"required_when": "The trigger must be a Likert, yes/no or choice question."}
+        return {}
+
     def save(self, *args, **kwargs):
+        self.required = self.kind != self.Kind.FREE_TEXT
         if self.position is None and self.version_id:
             from rounds.models import next_position
 
@@ -208,10 +244,14 @@ class EvaluationSubmission(UUIDModel):
     )
     submitted_at = models.DateTimeField(default=timezone.now)
     self_reported_session_minutes = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
         help_text="How long they say they attended this session. Only used when there "
-        "is no attendance record."
+        "is no attendance record. Blank on a draft.",
     )
-    attestation = models.BooleanField(help_text="They confirm the minutes are accurate.")
+    attestation = models.BooleanField(
+        default=False, help_text="They confirm the minutes are accurate. Part of what makes it complete."
+    )
     is_complete = models.BooleanField(
         default=False,
         editable=False,
@@ -227,8 +267,11 @@ class EvaluationSubmission(UUIDModel):
             models.UniqueConstraint(
                 fields=["person", "session"], name="evaluationsubmission_one_per_session"
             ),
+            # A draft may lack both; a complete submission is attested with minutes.
             models.CheckConstraint(
-                condition=Q(attestation=True), name="evaluationsubmission_attested"
+                condition=Q(is_complete=False)
+                | (Q(attestation=True) & Q(self_reported_session_minutes__isnull=False)),
+                name="evaluationsubmission_complete_is_attested",
             ),
         ]
 
@@ -239,8 +282,6 @@ class EvaluationSubmission(UUIDModel):
         from .windows import submission_allowed
 
         super().clean()
-        if not self.attestation:
-            raise ValidationError({"attestation": "The attestation is required."})
         if self._state.adding and self.person_id and self.session_id:
             if not submission_allowed(self.person, self.session):
                 raise ValidationError(

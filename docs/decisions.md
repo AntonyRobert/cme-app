@@ -340,12 +340,26 @@ session, has an answer; optional questions count neither way. Resolution is sess
 then event, then program default, active forms only. `per_objective` is a question kind
 rather than a special case outside the template system.
 
+**Likert and choice questions are mandatory; free text is optional unless a condition
+makes it required.** `required` is derived from the kind, not ticked. A free-text
+question may carry `required_when` (another question's key and the triggering value),
+enforced in the completeness rule on the server and shown on the page as soon as the
+trigger is answered. Forcing everyone to type into every free-text box would produce
+"n/a" and destroy the signal.
+
+**Partial evaluations persist as drafts.** Saved on "Save and finish later" or on a
+submit that is still missing something; visible on the credits page as in progress with
+a count of what is left; no credit until complete. A draft survives its window
+expiring, but completing it needs an open or reopened window, consistent with a draft
+not closing a reopened window: the completed submission is the claim, not the draft.
+
 **The seeded "Standard CME evaluation" is provisional, pending McGill CPD.**
 Accrediting bodies specify what a CME evaluation must ask. Until CPD confirms the
 wording, every program's default is: objectives met (one Likert per objective,
 required), relevance to practice (Likert, required), free of commercial bias (yes/no,
-required), bias detail, practice change and comments (free text, optional). Changing
-it later is a new version of the form, not an edit of what was answered.
+required), bias detail (free text, required only when bias is answered no), practice
+change and comments (free text, optional). Changing it later is a new version of the
+form, not an edit of what was answered.
 
 ## Open
 

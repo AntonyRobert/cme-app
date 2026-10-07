@@ -449,17 +449,24 @@ def test_one_submission_per_person_per_session(event, person):
     evaluate(person, sessions(event)[1])
 
 
-def test_attestation_is_required(event, person):
-    with pytest.raises(IntegrityError), transaction.atomic():
-        from .factories import form_for
+def test_a_complete_submission_is_attested_with_minutes(event, person):
+    """A draft may lack both; nothing counts as complete without them."""
+    from .factories import answer_all, form_for
 
-        EvaluationSubmission.objects.create(
-            person=person,
-            session=sessions(event)[0],
-            form_version=form_for(sessions(event)[0]),
-            self_reported_session_minutes=20,
-            attestation=False,
-        )
+    submission = EvaluationSubmission.objects.create(
+        person=person, session=sessions(event)[0], form_version=form_for(sessions(event)[0]),
+    )
+    answer_all(submission)
+    assert not submission.is_complete  # every question answered, but no attestation or minutes
+    submission.attestation = True
+    submission.save()
+    assert not submission.is_complete
+    submission.self_reported_session_minutes = 20
+    submission.save()
+    assert submission.is_complete
+    # The database holds the same line.
+    with pytest.raises(IntegrityError), transaction.atomic():
+        EvaluationSubmission.objects.filter(pk=submission.pk).update(attestation=False)
 
 
 def test_one_answer_per_question_including_general_questions(event, person):

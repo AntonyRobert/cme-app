@@ -277,7 +277,8 @@ class QuestionInline(admin.TabularInline):
     model = EvaluationQuestion
     form = SafeModelForm
     extra = 0
-    fields = ["position", "question_key", "kind", "required", "prompt", "help_text", "choices"]
+    fields = ["position", "question_key", "kind", "required", "required_when", "prompt", "help_text", "choices"]
+    readonly_fields = ["required"]
 
     def has_add_permission(self, request, obj=None):
         return super().has_add_permission(request, obj) and not (obj and obj.is_locked)
