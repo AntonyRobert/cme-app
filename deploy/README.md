@@ -11,7 +11,9 @@ parameterized by `<org>` (today: `mcgill`), even with one tenant.
 | `grants.sql` | What the app role may do. Applied after every migrate. |
 | `cme@.service` | gunicorn, one instance per tenant, Unix socket, hardened. |
 | `cme-backup@.service`, `.timer`, `cme-backup-failed@.service` | Nightly `backup.sh`; the failure unit makes a failed night visible. |
-| `backup.sh`, `restore-test.sh` | Backup to the tenant's restic repository in S3, and the proof it restores from there. |
+| `backup.sh`, `backup-now.sh` | Backup to the tenant's restic repository in S3; run one now and see the log. |
+| `restore-test.sh`, `restore-drill.sh` | Prove the S3 backup restores (scratch database); replace the live data from it (the drill). |
+| `split-backup-env.sh` | Move the backup credentials out of the web process's env file, verifying each step. |
 | `env.backup.template` | The backup credentials file, `/etc/cme/<org>.backup.env`. |
 | `env.template`, `site.caddy.template` | Filled in by `server-setup.sh`. |
 
@@ -26,7 +28,7 @@ parameterized by `<org>` (today: `mcgill`), even with one tenant.
    location:
    ```
    git clone git@github.com:AntonyRobert/cme-app.git /tmp/cme-app
-   sudo bash /tmp/cme-app/deploy/server-setup.sh mcgill cme.mri3.ca git@github.com:AntonyRobert/cme-app.git you@example.org
+   sudo bash /tmp/cme-app/deploy/server-setup.sh mcgill mcgill.cme.mri3.ca git@github.com:AntonyRobert/cme-app.git admin@mri3.ca
    ```
    The last argument is the ACME email: where Let's Encrypt sends certificate expiry
    warnings. Use an address someone reads.
@@ -44,12 +46,14 @@ parameterized by `<org>` (today: `mcgill`), even with one tenant.
    resolves here, and nothing works over HTTPS until then.
 7. `sudo /srv/cme/mcgill/deploy/deploy.sh mcgill`
 8. `sudo /srv/cme/mcgill/deploy/manage.sh mcgill createsuperuser`
-9. `curl -I https://cme.mri3.ca/` should return `200` (or `302` to the admin login) with
+9. `curl -I https://mcgill.cme.mri3.ca/` should return `200` (or `302` to the admin login) with
    `strict-transport-security` in the headers.
 
 Routine deploys are step 7 alone.
 
-`server-setup.sh` is safe to rerun at any time; every step checks before it acts.
+`server-setup.sh` is safe to rerun at any time; every step checks before it acts, and
+after the first run it remembers its arguments, so a rerun is `sudo /srv/cme/mcgill/deploy/server-setup.sh mcgill`
+and cannot regenerate the site under a different hostname by accident.
 
 ## Email
 
@@ -72,12 +76,12 @@ matters.**
 
 **Credentials** live in `/etc/cme/mcgill.backup.env` (root, 0600; template in
 `env.backup.template`), read by the backup unit only, so gunicorn never carries them.
-If they were put in `/etc/cme/mcgill.env` first, move them:
+If they were put in `/etc/cme/mcgill.env` first, move them with the script, which
+extracts all four, verifies they landed, and only then removes them from the main file
+(it refuses and changes nothing if the count is wrong):
 
-```bash
-sudo sh -c 'grep -E "^(RESTIC_|AWS_)" /etc/cme/mcgill.env > /etc/cme/mcgill.backup.env && chmod 0600 /etc/cme/mcgill.backup.env'
-sudo sed -i -e '/^RESTIC_/d' -e '/^AWS_/d' /etc/cme/mcgill.env
-sudo systemctl restart cme@mcgill
+```
+sudo /srv/cme/mcgill/deploy/split-backup-env.sh mcgill
 ```
 
 **RESTIC_PASSWORD must exist somewhere other than this server.** The repository is
@@ -89,42 +93,39 @@ logs at error priority: `journalctl -p err -t cme-backup` shows it, and so does
 healthcheck ping) still needs wiring there; until then, check `systemctl list-timers` and
 the failed list when you look at the box. A backup that silently stops is worse than none.
 
+**Run a backup now** and see how it went:
+
+```
+sudo /srv/cme/mcgill/deploy/backup-now.sh mcgill
+```
+
 ## The restore test, from S3
 
 `restore-test.sh` pulls the latest snapshot from S3 into a scratch directory, restores
 the dump into `cme_mcgill_restoretest`, compares row counts with the live database,
 checks every restored upload against the live file byte for byte, and drops the scratch
-database. The live database and uploads are never touched. Run it right after a backup
-so the counts match, with the backup environment loaded:
+database. The live database and uploads are never touched. It loads the backup
+environment itself. Run it right after a backup so the counts match:
 
-```bash
-sudo systemctl start cme-backup@mcgill && sudo journalctl -u cme-backup@mcgill -n 20 --no-pager
-sudo sh -c 'set -a; . /etc/cme/mcgill.backup.env; set +a; /srv/cme/mcgill/deploy/restore-test.sh mcgill'
+```
+sudo /srv/cme/mcgill/deploy/restore-test.sh mcgill
 ```
 
 Run it after the first deploy, after any Postgres upgrade, and once a quarter.
 
 ## The full drill: replace the live database from S3
 
-By hand, so each step is seen. Expect a minute of downtime.
+`restore-drill.sh` does what December would need: stops gunicorn, restores the latest
+snapshot from S3, drops and recreates the database from the dump, re-applies
+`grants.sql` (a `--no-privileges` restore leaves the app role with nothing), puts the
+restored uploads in place, starts gunicorn and checks it answers. About a minute of
+downtime. Without the flag it only says what it would do:
 
-```bash
-sudo systemctl stop cme@mcgill
-sudo sh -c 'set -a; . /etc/cme/mcgill.backup.env; set +a; restic restore latest --tag mcgill --target /var/tmp/cme-drill'
-DUMP=$(sudo find /var/tmp/cme-drill -name 'cme_mcgill-*.dump' | sort | tail -1); sudo chmod a+r "$DUMP"
-sudo -u postgres psql -c 'DROP DATABASE cme_mcgill'
-sudo -u postgres createdb --owner=cme_mcgill_owner --template=template0 --encoding=UTF8 --locale=C.UTF-8 cme_mcgill
-sudo -u cme_mcgill_owner pg_restore --no-owner --no-privileges --exit-on-error -d cme_mcgill "$DUMP"
-sudo -u cme_mcgill_owner psql -v app=cme_mcgill -d cme_mcgill -f /srv/cme/mcgill/deploy/grants.sql
-sudo rsync -a --delete /var/tmp/cme-drill/srv/cme/mcgill/uploads/ /srv/cme/mcgill/uploads/ && sudo chown -R cme_mcgill:cme_mcgill /srv/cme/mcgill/uploads
-sudo systemctl start cme@mcgill
-sudo rm -rf /var/tmp/cme-drill
-curl -sI https://cme.mri3.ca/admin/login/ | head -1
+```
+sudo /srv/cme/mcgill/deploy/restore-drill.sh mcgill --replace-live-data
 ```
 
-The grants line matters: a restore with `--no-privileges` recreates tables owned by the
-owner role with no grants to the app role, and gunicorn would get "permission denied"
-until it runs.
+Done once by hand with the database nearly empty; repeat yearly.
 
 ## Where things are
 

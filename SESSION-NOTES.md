@@ -262,6 +262,12 @@ listed). Nothing pushed.
 - **Fixed on the way:** `COIDeclarationQuerySet.valid_on` built its day boundary at UTC
   midnight, so a declaration made after 20:00 in Montreal was not "in force today". It
   now uses the local day.
+- **Working rule from Antony: nothing to run on the server goes in chat.** Every
+  operation, one-offs included, is a committed script in `deploy/` run with one line;
+  if something cannot be scripted, say so and explain each command. Hence
+  `split-backup-env.sh` (extract, verify four, only then remove; refuse otherwise:
+  the chat version could have lost all four secrets), `backup-now.sh`,
+  `restore-drill.sh --replace-live-data`, and `restore-test.sh` loading its own env.
 - **Two OS users per tenant**, not one: `cme_<org>_owner` (migrate, owns the checkout)
   and `cme_<org>` (gunicorn, owns uploads). Peer auth maps each to its role, so the only
   way to run DDL is to be the owner user, and the serving process never is.
@@ -271,8 +277,11 @@ listed). Nothing pushed.
 - **Caddy serves `/static/`**, so no WhiteNoise and no new dependency.
 - **The audit log trusts the rightmost X-Forwarded-For only, and only in prod.py.**
   Caddy strips client-sent forwarded headers, so the header holds exactly the client.
-- **Hostname `cme.mri3.ca`** replaces the `.com` pattern the docs had; the per-tenant
-  pattern becomes `<org>.cme.mri3.ca`.
+- **Hostname `mcgill.cme.mri3.ca`**, the per-tenant pattern `<org>.cme.mri3.ca`; the
+  `.com` pattern the docs had is gone. (An earlier note here said `cme.mri3.ca`; that
+  was wrong and a rerun of the setup script with it would have regenerated the Caddy
+  site under the wrong name. The script now remembers its arguments and refuses a
+  different hostname unless told the change is intended.)
 - **No `gh` on this machine**, so the GitHub repo and push are a two-line handoff: the
   audit (index and full history) is clean and recorded in the notes above.
 - **The shared test program has the gate ON.** Most of the suite was written against

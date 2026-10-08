@@ -49,7 +49,7 @@ def test_production_settings_pass_the_deployment_checks():
         **os.environ,
         "DJANGO_SETTINGS_MODULE": "config.settings.prod",
         "DJANGO_SECRET_KEY": "".join(chr(33 + i % 90) for i in range(64)),
-        "DJANGO_ALLOWED_HOSTS": "cme.mri3.ca",
+        "DJANGO_ALLOWED_HOSTS": "mcgill.cme.mri3.ca",
         "DATABASE_NAME": "cme_check",
         "UPLOAD_ROOT": str(ROOT / "uploads"),
         "EMAIL_BACKEND": "console",
@@ -92,16 +92,16 @@ def test_the_caddy_site_template_has_no_bare_lines_caddy_would_read_as_directive
     directive' and a Caddy that will not reload.
     """
     template = (ROOT / "deploy" / "site.caddy.template").read_text(encoding="utf-8")
-    rendered = template.replace("__ORG__", "mcgill").replace("__HOSTNAME__", "cme.mri3.ca")
+    rendered = template.replace("__ORG__", "mcgill").replace("__HOSTNAME__", "mcgill.cme.mri3.ca")
     directives = {"encode", "handle_path", "root", "header", "file_server", "handle", "reverse_proxy",
                   "header_up", "log", "output"}
     code = "\n".join(l for l in rendered.splitlines() if not l.strip().startswith("#"))
     assert "output file" not in code and "/var/log" not in code  # the journal, never a file Caddy cannot write
     first_code = next(l for l in rendered.splitlines() if l.strip() and not l.lstrip().startswith("#"))
-    assert first_code == "cme.mri3.ca {"  # the site block opens with the hostname, nothing before it
+    assert first_code == "mcgill.cme.mri3.ca {"  # the site block opens with the hostname, nothing before it
     for line in rendered.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("#") or stripped in ("}", "cme.mri3.ca {"):
+        if not stripped or stripped.startswith("#") or stripped in ("}", "mcgill.cme.mri3.ca {"):
             continue
         assert stripped.split()[0] in directives, f"not a directive: {line!r}"
     assert "__" not in rendered  # every placeholder substituted
@@ -134,3 +134,40 @@ def test_the_restore_test_restores_from_s3_not_the_local_dump():
     assert "/var/backups" not in restore  # the same disk proves nothing
     assert "pg_restore" in restore and "_restoretest" in restore and "DROP DATABASE" in restore
     assert "sha256sum" in restore  # uploads come back byte for byte
+
+
+def test_the_hostname_is_the_per_tenant_one_everywhere_operational():
+    for name in ("README.md", "server-setup.sh"):
+        text = (ROOT / "deploy" / name).read_text(encoding="utf-8")
+        assert "mcgill.cme.mri3.ca" in text
+        assert "admin@mri3.ca" in text and "you@example" not in text
+        for line in text.splitlines():
+            if "cme.mri3.ca" in line and "<org>" not in line:
+                assert "mcgill.cme.mri3.ca" in line, line
+
+
+def test_setup_remembers_its_arguments_and_refuses_a_silent_hostname_change():
+    setup = (ROOT / "deploy" / "server-setup.sh").read_text(encoding="utf-8")
+    assert 'SAVED="/etc/cme/${ORG}.setup"' in setup
+    assert "CME_SETUP_CHANGE" in setup and "take the site down" in setup
+
+
+def test_the_backup_env_split_verifies_before_it_removes_anything():
+    split = (ROOT / "deploy" / "split-backup-env.sh").read_text(encoding="utf-8")
+    assert split.startswith("#!/usr/bin/env bash") and "set -euo pipefail" in split
+    assert 'ORG="${1:?' in split
+    # The write is verified before the main file is touched, and the removal
+    # goes through a verified temp copy too.
+    assert split.index('if [[ "$(count_keys "$TMP")" -ne 4 ]]') < split.index('mv "$TMP" "$BACKUP"')
+    assert split.index('mv "$TMP" "$BACKUP"') < split.index("grep -vE")
+    assert "Nothing changed" in split
+    assert "echo $RESTIC" not in split and "cat " not in split  # prints no values
+    mode = subprocess.run(["git", "ls-files", "-s", "deploy/split-backup-env.sh"], cwd=ROOT, capture_output=True, text=True).stdout
+    assert mode.startswith("100755"), mode
+
+
+def test_the_drill_is_a_dry_run_unless_told_to_replace_live_data():
+    drill = (ROOT / "deploy" / "restore-drill.sh").read_text(encoding="utf-8")
+    assert "--replace-live-data" in drill and "Nothing was done" in drill
+    assert drill.index("Nothing was done") < drill.index('psql -qtAc "DROP DATABASE')  # the dry-run exit precedes the real drop
+    assert "grants.sql" in drill and "systemctl start" in drill

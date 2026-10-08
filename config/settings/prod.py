@@ -60,7 +60,7 @@ if EMAIL_BACKEND.endswith("smtp.EmailBackend"):
     EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD")
     EMAIL_USE_TLS = True
     EMAIL_TIMEOUT = 10
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "rounds@cme.mri3.ca")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "rounds@mri3.ca")
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 # Everything to stderr; systemd's journal keeps it (journalctl -u cme@<org>).

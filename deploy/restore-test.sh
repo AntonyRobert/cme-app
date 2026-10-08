@@ -3,8 +3,7 @@
 # restore test that reads a file on the same disk is not testing the thing
 # that would actually fail.
 #
-#   restore-test.sh <org> [snapshot-id]     (run with the backup environment loaded:
-#                                            sudo systemd-run --wait -P -E ... or see README)
+#   sudo /srv/cme/<org>/deploy/restore-test.sh <org> [snapshot-id]
 #
 # Pulls the latest snapshot (or the one given) from the tenant's restic
 # repository into a scratch directory, restores the dump it holds into a
@@ -23,9 +22,17 @@ OWNER="cme_${ORG}_owner"
 WORK="$(mktemp -d /var/tmp/cme-restore-${ORG}.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
-: "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is not set: load /etc/cme/${ORG}.backup.env first}"
+[[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 1; }
+# Load the backup environment ourselves. Nothing is printed.
+BACKUP_ENV="/etc/cme/${ORG}.backup.env"
+set -a
+# shellcheck disable=SC1090
+if [[ -f "$BACKUP_ENV" ]]; then source "$BACKUP_ENV"; else source "/etc/cme/${ORG}.env"; fi
+set +a
+: "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is not set: see deploy/env.backup.template}"
 : "${RESTIC_PASSWORD:?RESTIC_PASSWORD is not set}"
 export RESTIC_REPOSITORY RESTIC_PASSWORD AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+export RESTIC_CACHE_DIR="/var/cache/restic/${ORG}"
 
 say() { printf '==> %s\n' "$*"; }
 

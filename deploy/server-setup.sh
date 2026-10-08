@@ -6,8 +6,13 @@
 #
 #   git clone git@github.com:AntonyRobert/cme-app.git /tmp/cme-app     # with any key that can read the repo
 #   sudo bash /tmp/cme-app/deploy/server-setup.sh <org> <hostname> <git-ssh-url> <acme-email>
-#   e.g.  sudo bash /tmp/cme-app/deploy/server-setup.sh mcgill cme.mri3.ca \
-#             git@github.com:AntonyRobert/cme-app.git you@example.org
+#   e.g.  sudo bash /tmp/cme-app/deploy/server-setup.sh mcgill mcgill.cme.mri3.ca \
+#             git@github.com:AntonyRobert/cme-app.git admin@mri3.ca
+#
+# The three arguments after the org are remembered in /etc/cme/<org>.setup; every
+# later run is just:   sudo /srv/cme/<org>/deploy/server-setup.sh <org>
+# A different hostname is refused unless CME_SETUP_CHANGE=1 is set, because
+# regenerating the Caddy site under a new name takes the site down.
 #
 # Ubuntu 24.04 LTS on Lightsail. Idempotent where it reasonably can be: running
 # it twice is safe, and it is EXPECTED to run twice: the first run generates the
@@ -26,12 +31,27 @@
 #   6. Caddy: a site block for the hostname proxying to the tenant's socket, static files served directly
 set -euo pipefail
 
-USAGE="usage: server-setup.sh <org> <hostname> <git-ssh-url> <acme-email>"
+USAGE="usage: server-setup.sh <org> [<hostname> <git-ssh-url> <acme-email>]  (arguments are remembered after the first run)"
 ORG="${1:?$USAGE}"
-HOSTNAME_FQDN="${2:?$USAGE}"
-GIT_URL="${3:?$USAGE}"
+SAVED="/etc/cme/${ORG}.setup"
+if [[ -f "$SAVED" ]]; then
+  # shellcheck disable=SC1090
+  source "$SAVED"
+fi
+if [[ $# -ge 4 ]]; then
+  if [[ -f "$SAVED" && ( "$2" != "${HOSTNAME_FQDN:-}" || "$3" != "${GIT_URL:-}" ) && "${CME_SETUP_CHANGE:-}" != "1" ]]; then
+    echo "Refusing: this tenant was set up as ${HOSTNAME_FQDN:-?} from ${GIT_URL:-?}, and you gave $2 / $3." >&2
+    echo "A different hostname would regenerate the Caddy site under a new name and take the site down." >&2
+    echo "If the change is intended, rerun with CME_SETUP_CHANGE=1 in the environment." >&2
+    exit 1
+  fi
+  HOSTNAME_FQDN="$2"; GIT_URL="$3"; ACME_EMAIL="$4"
+elif [[ $# -ne 1 || ! -f "$SAVED" ]]; then
+  echo "$USAGE" >&2
+  exit 1
+fi
 # Where Let's Encrypt sends certificate expiry warnings. Use an address someone reads.
-ACME_EMAIL="${4:?$USAGE}"
+: "${HOSTNAME_FQDN:?$USAGE}" "${GIT_URL:?$USAGE}" "${ACME_EMAIL:?$USAGE}"
 
 if [[ ! "$ORG" =~ ^[a-z][a-z0-9]{1,15}$ ]]; then
   echo "org must be a short lowercase name (it becomes a unix user and a database name)" >&2
@@ -167,6 +187,9 @@ install -d -o root -g root -m 0755 /srv/cme
 install -d -o "$OWNER_USER" -g "$APP_USER" -m 0750 "$CHECKOUT"
 install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$CHECKOUT/uploads"
 install -d -o root -g root -m 0755 /etc/cme
+# Remember the arguments, so a rerun is "server-setup.sh <org>" and cannot drift.
+printf 'HOSTNAME_FQDN=%q\nGIT_URL=%q\nACME_EMAIL=%q\n' "$HOSTNAME_FQDN" "$GIT_URL" "$ACME_EMAIL" > "$SAVED"
+chmod 0644 "$SAVED"
 install -d -o root -g root -m 0750 "/var/backups/cme/${ORG}"
 # /run/cme/<org> is NOT made here: systemd creates it for the service user on
 # each start (RuntimeDirectory= in cme@.service). /run is tmpfs.

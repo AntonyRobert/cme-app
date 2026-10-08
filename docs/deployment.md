@@ -202,7 +202,7 @@ cheaper to get right the first time than to rename later.
 
 ### Hostnames
 
-- The first instance is `cme.mri3.ca` (McGill). Later tenants: `<org>.cme.mri3.ca`.
+- The first instance is `mcgill.cme.mri3.ca` (McGill). Later tenants: `<org>.cme.mri3.ca`.
 - An institution may later point its own hostname at the server with a CNAME. Caddy gets a
   certificate for it like any other name.
 - **No code may assume the shape of the hostname.** Nothing parses a hostname to work out
