@@ -103,6 +103,21 @@ listed). Nothing pushed.
   page; the event and session forms have the FK. Attendee form at `/evaluate/<session>/`
   (stable, for the step-5 email), linked from `/me/`. Eighteen tests in
   `credits/tests/test_evaluation_forms.py`, including the four you listed.
+- **The National Standard disclosure form** (your A to J). Settings carry the form's
+  wording as `v2026-national-standard` beside the retired `2026-10`; `COIDeclaration`
+  gains role, the top-level binary, the two speaker questions and the attestation
+  snapshot; `COIResponse` has the two columns (legacy `details` migrated into the
+  description); `SessionPresenter.coi_confirmed_at` records the per-activity
+  confirmation. `rounds/coi.py`: `validate_declaration` (shared by the service, the
+  admin form and the presenter page), `declare`, `declare_no_conflicts`,
+  `confirm_for_session`, `slide_text`. The presenter's page `/me/disclosure/` (linked
+  from the credits page for anyone who presents) carries the form (binary reveals the
+  categories, speaker reveals the two questions; the server applies the same rules),
+  the declaration in force, the slide text with a copy button, and a confirm button per
+  upcoming session. `RoundsEvent.clean` refuses the move to published while a presenter
+  has no declaration and the event page lists who. Admin: the add form follows the new
+  layout, the list has a "needs review" filter, the session inline says "reused, not yet
+  confirmed". Thirteen tests in `rounds/tests/test_national_standard.py`.
 - **Deployment, step 1** (`deploy/`, `config/settings/prod.py`, `core/middleware.py`).
   Written and tested as far as a Windows laptop can test Linux scripts: bash syntax,
   `check --deploy` under the production settings with the env file's shape, the
@@ -228,6 +243,23 @@ listed). Nothing pushed.
   template now logs to stderr (`journalctl -u caddy`) and a test refuses `output file`.
   Line 1 of the template was checked again (`cat -A`, on disk and on `origin/main`): it
   has always started with `#`.
+- **The preamble is assembled, not quoted.** You gave me the fragments ("over the
+  previous 2 years", "irrespective of the subject being discussed"); the sentence around
+  them is mine. Check it against the form before launch; it is one string in
+  `COI_STANDARD["preamble"]`.
+- **The organizations column is enforced by the model and the service, not the
+  database.** A check constraint cannot see the parent's version, and legacy rows have
+  no organizations. The description is required by constraint on every version.
+- **A declaration made on the presenter's page attaches itself to their upcoming
+  sessions that have none**, so declaring is enough to unblock publishing; a session
+  that already carries an older declaration keeps it until the presenter or staff
+  change it.
+- **Publishing is what a missing declaration blocks**, not the draft or held states, and
+  not attaching the presenter. Staff can still set everything up; the event cannot go
+  out until everyone has disclosed, and the page says who.
+- **Fixed on the way:** `COIDeclarationQuerySet.valid_on` built its day boundary at UTC
+  midnight, so a declaration made after 20:00 in Montreal was not "in force today". It
+  now uses the local day.
 - **Two OS users per tenant**, not one: `cme_<org>_owner` (migrate, owns the checkout)
   and `cme_<org>` (gunicorn, owns uploads). Peer auth maps each to its role, so the only
   way to run DDL is to be the owner user, and the serving process never is.

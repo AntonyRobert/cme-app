@@ -153,14 +153,23 @@ can be edited for someone who walked in late, with the reason saying so. A roste
 active if the device row is later superseded, but the admin warns on it: if the device's
 times were wrong, so are the copies.
 
-**Conflict of interest is a versioned questionnaire, valid for a year.**
-One answer per question, with an explanation required for every yes. Questions are kept
-in settings by version, and a declaration renders with its own version's wording, so a
-rewording never rewrites history. "No conflicts" is recorded as an explicit no to every
-question, because an accreditor must be able to tell an attested no from a form nobody
-filled in. Validity is a rolling year from the declaration rather than a fixed 30 June:
-a presenter who declares in May should not have to declare again in July. The first
-question set is provisional pending McGill CPD; adding a version is a settings change.
+**Conflict of interest is the National Standard disclosure form, versioned, valid for a
+year.** The categories and all wording come from the McGill/CPD form, which follows the
+National Standard for Support of Accredited CPD Activities, and **are not to be reworded
+locally**: five categories, two columns per yes (organizations, description), a
+top-level "relationship to disclose / none" radio, the role in the activity, two
+speaker-only questions (off-label use; the generic-names acknowledgement, a no on which
+is flagged for the program admin), and the attestation with the declarant's name and
+date snapshotted. The lookback is the form's two years; our validity is one year, so
+people re-declare annually, each time covering the previous two. Questions are kept in
+settings by version and a declaration renders with its own version's wording, so a
+rewording never rewrites history; the provisional 2026-10 set is retired, not deleted.
+"No relationship" is recorded as an explicit no to every category, because an accreditor
+must be able to tell an attested no from a form nobody filled in. The approved form is
+per activity; ours is a standing declaration that the presenter confirms for each
+session they present, never reused silently. Speakers get their disclosure slide text
+generated from what they declared. A missing declaration blocks publishing the event:
+the Standard says anyone who fails to disclose cannot participate.
 
 **Uploads are matched to events on Teams meeting title plus date. There is no meeting ID.**
 The real export has none; the summary holds only title, counts and times. `RoundsEvent`

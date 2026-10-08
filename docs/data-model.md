@@ -318,7 +318,8 @@ list.
 | session | FK Session | |
 | person | FK Person | A presenter is sometimes also an attendee |
 | position | smallint | Order the names print |
-| coi_declaration | FK COIDeclaration, nullable | The declaration in force for this person at this session. Null until they declare |
+| coi_declaration | FK COIDeclaration, nullable | The declaration in force for this person at this session. Null until they declare; null blocks publishing the event |
+| coi_confirmed_at | timestamptz, nullable | When the presenter confirmed, on their own page, that the attached declaration is still accurate for this session. The approved form is per activity; ours is reused, and never silently |
 
 Unique on `(session, person)` and `(session, position)`.
 
@@ -339,14 +340,26 @@ evaluation form expands into one question per row at render time.
 
 ### COIDeclaration
 
-A structured questionnaire, not a single checkbox: one `COIResponse` per question.
+The McGill/CPD disclosure form, which follows the **National Standard for Support of
+Accredited CPD Activities**. One `COIResponse` per category, plus the form's own fields.
+**The categories and every piece of wording are the Standard's and are not to be
+reworded locally**; they live in settings as version `v2026-national-standard`
+(`COI_QUESTIONS`, `COI_STANDARD`). The earlier provisional set, `2026-10`, is retired
+and kept only so declarations made under it render as made.
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | id | UUID pk | |
 | person | FK Person | |
-| declared_at | timestamptz | Valid for a year from this, rolling (`COI_VALIDITY_DAYS`) |
+| declared_at | timestamptz | Valid for a year from this, rolling (`COI_VALIDITY_DAYS`); also the date snapshotted with the attestation |
 | disclosure_text_version | text | Which questionnaire was answered. Must exist in `COI_QUESTIONS` |
+| activity_role | enum | spc_member, moderator, speaker, author, facilitator, other. Required on the Standard form. A declaration is not tied to a session: an SPC member declares too |
+| activity_role_other | text | Required when the role is other |
+| has_relationships | bool, nullable | The form's top-level radio: "I do not have a relationship with a for-profit and/or a not-for-profit organization to disclose" / "I have a relationship ... to disclose". No writes an explicit no to every category. Null on legacy declarations |
+| off_label | bool, nullable | Speakers only: intends to make therapeutic recommendations for off-label use |
+| generic_names_acknowledged | bool, nullable | Speakers only. **A no is flagged for the program admin** (`needs_review`), never silently accepted |
+| attested | bool | "I agree" was ticked: "By clicking 'I agree' you are acknowledging that the above information is accurate and that you understand that this information will be publicly available." Required |
+| attested_name | text | The declarant's name as it was when they agreed. Snapshotted |
 
 ### COIResponse
 
@@ -354,26 +367,41 @@ A structured questionnaire, not a single checkbox: one `COIResponse` per questio
 | --- | --- | --- |
 | id | UUID pk | |
 | declaration | FK COIDeclaration | |
-| question_key | text | Stable across versions, e.g. `consulting` |
+| question_key | text | Stable across versions: `direct_payments`, `advisory_boards`, `grants_trials`, `patents`, `other_interests` |
 | has_conflict | bool | |
-| details | text | Required when `has_conflict` is true (check constraint) |
+| organizations | text | "Name of for-profit or not-for-profit organization(s)". Required when yes on the Standard form (model and service) |
+| relationship_description | text | "Description of relationship(s)". Required when yes (check constraint). Legacy declarations' single explanation migrated here |
 
-Unique on `(declaration, question_key)`.
+Unique on `(declaration, question_key)`; a no carries nothing in either column (check
+constraint).
 
-**The questions live in settings**, in `COI_QUESTIONS`, keyed by version, each item a
-stable `question_key` and its text. The program's `coi_question_version` names the one
-its new declarations use. A declaration always renders with the wording of **its own** version, so rewording a
-question never changes what an old declaration says. To change the questions, add a new
-version; never edit an existing one. The starting set, `2026-10`, is provisional pending
-McGill CPD: research funding or grants; consulting or advisory roles; speaker fees or
-honoraria; equity or ownership; employment; intellectual property or royalties; other
-relevant interests.
+**The lookback is two years**, "over the previous 2 years, irrespective of the subject
+being discussed", stated in the preamble. That is separate from our one-year validity:
+people re-declare annually, each time covering the previous two years.
 
-**Complete means every question of its version has a response.** "No conflicts in any
-category" writes an explicit no to each question (`rounds.coi.declare_no_conflicts`),
-never leaves them blank, so an unanswered declaration (no responses) and an attested no
-(seven noes) are always distinguishable. `rounds.coi.declare` refuses a missing answer,
-an unknown question or a yes without details, and writes nothing in that case.
+**Complete means** every category of its version has a response and, on the Standard
+form, a role, the top-level answer, the two speaker questions when the role is speaker,
+and the attestation. "No relationship to disclose" writes an explicit no to each category
+(`rounds.coi.declare_no_conflicts`), never leaves them blank, so an unanswered
+declaration (no responses) and an attested no are always distinguishable.
+`rounds.coi.declare` refuses anything missing and writes nothing in that case; the same
+rules (`validate_declaration`) run behind the admin form and the presenter's own page.
+
+**The disclosure slide.** Speakers disclose verbally and on a slide at the start.
+`rounds.coi.slide_text(declaration)` produces the text from what was declared: no
+relationships, or each category with its organizations and description, plus an
+off-label line; the presenter's page (`/me/disclosure/`) shows it with a copy button.
+
+**Per-activity confirmation.** The approved form is per activity (title and date of the
+CPD activity); ours is a standing declaration. A presenter attached to a session with a
+valid declaration confirms on their page that it is still accurate for that session
+(`SessionPresenter.coi_confirmed_at`, audit `coi.confirmed_for_session`). The session
+admin shows "reused, not yet confirmed" until they do.
+
+**A missing declaration blocks participation.** The Standard says anyone who fails to
+disclose cannot participate as an SPC member, speaker, moderator, facilitator or author.
+An event with a presenter who has no declaration cannot move to published
+(`RoundsEvent.clean`), and the event page lists who and why.
 
 **Validity is one year from `declared_at`**, rolling, replacing the earlier fixed 30 June.
 A declaration is in force from the day it was made to the day before its anniversary.
@@ -387,7 +415,9 @@ session, not what the presenter has declared since.
 
 Existing single-checkbox declarations were converted by migration to version `2026-10`:
 "no conflict" became a no to every question; "conflict" became a yes under "other" with
-the details given, and no to the rest.
+the details given, and no to the rest. Their one explanation now lives in
+`relationship_description`. Every program was moved to `v2026-national-standard` by
+migration; new declarations use it.
 
 ## Attendance
 
