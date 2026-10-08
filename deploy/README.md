@@ -8,6 +8,7 @@ parameterized by `<org>` (today: `mcgill`), even with one tenant.
 | `server-setup.sh` | One-time: packages (incl. fail2ban), users, Postgres roles, directories, deploy key and clone, units, Caddy. Read it first. Runs twice by design. |
 | `deploy.sh` | Every deploy: pull, pip, checks, migrate (as owner), grants, collectstatic, restart, smoke test. |
 | `manage.sh` | `manage.py` with the production environment, as the owner user. |
+| `reset-staff-password.sh` | Reset an admin login's password; prompts in the terminal, prints nothing. |
 | `grants.sql` | What the app role may do. Applied after every migrate. |
 | `cme@.service` | gunicorn, one instance per tenant, Unix socket, hardened. |
 | `cme-backup@.service`, `.timer`, `cme-backup-failed@.service` | Nightly `backup.sh`; the failure unit makes a failed night visible. |
