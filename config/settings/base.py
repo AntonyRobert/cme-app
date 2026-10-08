@@ -147,7 +147,11 @@ SERIES_NAME = "Health Informatics Rounds"
 # rewording a question never changes what an old declaration says. To change
 # the questions, add a new version and point COI_CURRENT_VERSION at it; never
 # edit an existing one. question_key is stable across versions.
-# The 2026-10 set is provisional, pending confirmation with McGill CPD.
+#
+# v2026-national-standard is the McGill/CPD disclosure form, which follows the
+# National Standard for Support of Accredited CPD Activities. ITS WORDING IS
+# THEIRS AND IS NOT TO BE REWORDED HERE. The 2026-10 set was provisional and
+# is retired; it stays so declarations made under it render as made.
 COI_QUESTIONS = {
     "2026-10": [
         ("research_funding", "Research funding or grants"),
@@ -158,8 +162,68 @@ COI_QUESTIONS = {
         ("intellectual_property", "Intellectual property or royalties"),
         ("other", "Other relevant interests"),
     ],
+    "v2026-national-standard": [
+        ("direct_payments", "Any direct financial payments including receipt of honoraria"),
+        ("advisory_boards", "Membership on advisory boards or speakers' bureaus"),
+        ("grants_trials", "Funded grants or clinical trials"),
+        ("patents", "Patents on a drug, product or device"),
+        (
+            "other_interests",
+            "All other investments or relationships that could be seen by a reasonable, "
+            "well-informed participant as having the potential to influence the content of "
+            "the educational activity",
+        ),
+    ],
 }
-COI_CURRENT_VERSION = "2026-10"
+COI_CURRENT_VERSION = "v2026-national-standard"
+# Versions laid out as the National Standard form: a top-level binary, two text
+# fields per category, a role in the activity, speaker-only questions and the
+# attestation. Everything in COI_STANDARD below is that form's own wording.
+COI_NATIONAL_STANDARD_VERSIONS = {"v2026-national-standard"}
+COI_STANDARD = {
+    # The lookback: two years, irrespective of the subject discussed. Separate
+    # from the one-year validity of a declaration here: people re-declare
+    # annually, each time covering the previous two years.
+    "lookback_years": 2,
+    "preamble": (
+        "Please disclose all relationships with for-profit and/or not-for-profit organizations "
+        "over the previous 2 years, irrespective of the subject being discussed."
+    ),
+    "binary": {
+        "no": "I do not have a relationship with a for-profit and/or a not-for-profit organization to disclose",
+        "yes": "I have a relationship with a for-profit and/or a not-for-profit organization to disclose",
+    },
+    "columns": ("Name of for-profit or not-for-profit organization(s)", "Description of relationship(s)"),
+    "roles": [
+        ("spc_member", "Scientific planning committee member"),
+        ("moderator", "Moderator"),
+        ("speaker", "Speaker"),
+        ("author", "Author"),
+        ("facilitator", "Facilitator"),
+        ("other", "Other"),
+    ],
+    "speaker": {
+        "off_label": {
+            "text": (
+                "I intend to make therapeutic recommendations for medications that have not received "
+                "regulatory approval (i.e. 'off-label' use of medication)."
+            ),
+            "help": "You must declare all off-label use to the audience during your presentation.",
+        },
+        "generic_names": {
+            "text": (
+                "I acknowledge that the National Standard requires that any description of therapeutic "
+                "options utilize generic names (or both generic and trade names) and not reflect "
+                "exclusivity and branding."
+            ),
+            "help": "",
+        },
+    },
+    "attestation": (
+        "By clicking 'I agree' you are acknowledging that the above information is accurate and "
+        "that you understand that this information will be publicly available."
+    ),
+}
 # A declaration is valid for this long after it was made, rolling.
 COI_VALIDITY_DAYS = 365
 

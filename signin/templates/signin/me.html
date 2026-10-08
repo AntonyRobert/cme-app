@@ -3,6 +3,7 @@
 {% block title %}My credits{% endblock %}
 {% block content %}
 <h1>{{ person.full_name }}</h1>
+{% if presents %}<p><a href="{% url 'rounds:disclosure' %}">My conflict-of-interest disclosure and slide text</a></p>{% endif %}
 
 {% if invited or activities %}
 <h2>Help us improve</h2>

@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% load dicts %}
+{% block title %}My disclosure{% endblock %}
+{% block content %}
+<h1>Conflict of interest disclosure</h1>
+<p class="muted">{{ person.full_name }}. <a href="{% url 'signin:me' %}">Back to my credits</a></p>
+
+{% if current %}
+<h2>Your declaration in force</h2>
+<p>Made {{ current.declared_at|date:"j F Y" }}{% if current.role_label %} as {{ current.role_label|lower }}{% endif %}; valid to {{ current.valid_until|date:"j F Y" }}.
+{% if current.has_relationships is False %}No relationships to disclose.{% else %}{{ current.summary|capfirst }}.{% endif %}
+{% if current.needs_review %}<strong>The program office will be in touch about the generic-names requirement.</strong>{% endif %}</p>
+<table>
+  <thead><tr><th>Category</th><th></th><th>{{ std.columns.0 }}</th><th>{{ std.columns.1 }}</th></tr></thead>
+  <tbody>
+  {% for text, yes, organizations, description in current.rendered %}
+    <tr><td>{{ text }}</td><td>{% if yes %}Yes{% elif yes is None %}-{% else %}No{% endif %}</td><td>{{ organizations }}</td><td>{{ description }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Your disclosure slide</h2>
+<p class="muted">Speakers disclose verbally and on a slide at the start of the presentation. This is yours, from what you declared; copy it onto your first slide.</p>
+<pre id="slide-text" style="white-space:pre-wrap;border:1px solid #ccc;padding:0.8em">{{ slide }}</pre>
+<p><button type="button" id="copy-slide">Copy slide text</button> <span id="copy-done" class="muted"></span></p>
+<script>
+  document.getElementById("copy-slide").addEventListener("click", function () {
+    var text = document.getElementById("slide-text").textContent;
+    var done = function () { document.getElementById("copy-done").textContent = "Copied."; };
+    if (navigator.clipboard) { navigator.clipboard.writeText(text).then(done); }
+    else { var r = document.createRange(); r.selectNodeContents(document.getElementById("slide-text")); var s = window.getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand("copy"); done(); }
+  });
+</script>
+
+{% if presentations %}
+<h2>Your upcoming sessions</h2>
+<p class="muted">The approved form is per activity. Your declaration is reused for each session you present; confirm it is still accurate for each one, or make a new declaration below if anything has changed.</p>
+{% if errors.confirm %}<p class="error">{{ errors.confirm }}</p>{% endif %}
+<table>
+  <thead><tr><th>Date</th><th>Session</th><th>Declaration</th><th></th></tr></thead>
+  <tbody>
+  {% for p in presentations %}
+    <tr>
+      <td>{{ p.session.event.date|date:"j M Y" }}</td>
+      <td>{{ p.session.title }}</td>
+      <td>{% if p.coi_declaration %}{{ p.coi_declaration.declared_at|date:"j M Y" }}{% if p.coi_confirmed_at %}, confirmed {{ p.coi_confirmed_at|date:"j M Y" }}{% endif %}{% else %}<strong>none attached</strong>{% endif %}</td>
+      <td>{% if p.coi_declaration and not p.coi_confirmed_at %}
+        <form method="post" style="display:inline">{% csrf_token %}<input type="hidden" name="action" value="confirm"><input type="hidden" name="presentation" value="{{ p.pk }}"><button type="submit">Still accurate for this session</button></form>
+      {% elif p.coi_confirmed_at %}<span class="muted">Confirmed</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% else %}
+<p><strong>You have no declaration in force.</strong> Anyone who fails to disclose cannot participate as a scientific planning committee member, speaker, moderator, facilitator or author.</p>
+{% endif %}
+
+{% if standard %}
+<h2>{% if current %}Make a new declaration{% else %}Declare{% endif %}</h2>
+<p>{{ std.preamble }}</p>
+<form method="post" id="disclosure-form">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="declare">
+
+  <p>
+    <label for="activity_role"><strong>Role in the activity</strong> <span class="muted">(required)</span></label><br>
+    <select name="activity_role" id="activity_role">
+      <option value="">---------</option>
+      {% for value, label in roles %}<option value="{{ value }}"{% if posted.activity_role == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+    <input type="text" name="activity_role_other" id="activity_role_other" placeholder="Which role?" value="{{ posted.activity_role_other|default:'' }}" maxlength="200">
+    {% if errors.activity_role %}<span class="error">{{ errors.activity_role }}</span>{% endif %}
+    {% if errors.activity_role_other %}<span class="error">{{ errors.activity_role_other }}</span>{% endif %}
+  </p>
+
+  <p><strong>Disclosure</strong> <span class="muted">(required)</span></p>
+  <p><label><input type="radio" name="has_relationships" value="no"{% if posted.has_relationships == "no" %} checked{% endif %}> {{ std.binary.no }}</label></p>
+  <p><label><input type="radio" name="has_relationships" value="yes"{% if posted.has_relationships == "yes" %} checked{% endif %}> {{ std.binary.yes }}</label></p>
+  {% if errors.has_relationships %}<p class="error">{{ errors.has_relationships }}</p>{% endif %}
+
+  <div id="categories">
+    <table>
+      <thead><tr><th></th><th>Category</th><th>{{ std.columns.0 }}</th><th>{{ std.columns.1 }}</th></tr></thead>
+      <tbody>
+      {% for key, text in questions %}
+        {% with tick="q_"|add:key org_field="q_"|add:key|add:"_organizations" desc_field="q_"|add:key|add:"_description" org_err=key|add:"_organizations" desc_err=key|add:"_description" %}
+        <tr>
+          <td><input type="checkbox" name="{{ tick }}" value="1"{% if posted|get_item:tick %} checked{% endif %}></td>
+          <td>{{ text }}</td>
+          <td><textarea name="{{ org_field }}" rows="2">{{ posted|get_item:org_field|default:'' }}</textarea>
+            {% with e=errors|get_item:org_err %}{% if e %}<br><span class="error">{{ e }}</span>{% endif %}{% endwith %}</td>
+          <td><textarea name="{{ desc_field }}" rows="2">{{ posted|get_item:desc_field|default:'' }}</textarea>
+            {% with e=errors|get_item:desc_err %}{% if e %}<br><span class="error">{{ e }}</span>{% endif %}{% endwith %}</td>
+        </tr>
+        {% endwith %}
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div id="speaker-questions">
+    <p><strong>Speakers</strong></p>
+    <p>{{ std.speaker.off_label.text }} <span class="muted">(required)</span><br>
+      <label><input type="radio" name="off_label" value="yes"{% if posted.off_label == "yes" %} checked{% endif %}> Yes</label>
+      <label><input type="radio" name="off_label" value="no"{% if posted.off_label == "no" %} checked{% endif %}> No</label><br>
+      <span class="muted">{{ std.speaker.off_label.help }}</span>
+      {% if errors.off_label %}<span class="error">{{ errors.off_label }}</span>{% endif %}</p>
+    <p>{{ std.speaker.generic_names.text }} <span class="muted">(required)</span><br>
+      <label><input type="radio" name="generic_names" value="yes"{% if posted.generic_names == "yes" %} checked{% endif %}> Yes</label>
+      <label><input type="radio" name="generic_names" value="no"{% if posted.generic_names == "no" %} checked{% endif %}> No</label>
+      {% if errors.generic_names %}<span class="error">{{ errors.generic_names }}</span>{% endif %}</p>
+  </div>
+
+  <p><label><input type="checkbox" name="attested" value="1"{% if posted.attested %} checked{% endif %}> <strong>I agree</strong></label><br>
+    <span class="muted">{{ std.attestation }}</span>
+    {% if errors.attested %}<span class="error">{{ errors.attested }}</span>{% endif %}</p>
+  <p class="muted">Declared by {{ person.full_name }} on {% now "j F Y" %}; both are recorded with the declaration.</p>
+  <p><button type="submit">Submit declaration</button></p>
+</form>
+<script>
+  // The form reveals what applies: the categories only when there is a
+  // relationship to disclose, the two speaker questions only for speakers.
+  // The server applies the same rules to what is posted.
+  (function () {
+    var form = document.getElementById("disclosure-form");
+    function update() {
+      var yes = form.querySelector('input[name="has_relationships"][value="yes"]').checked;
+      document.getElementById("categories").style.display = yes ? "" : "none";
+      var role = document.getElementById("activity_role").value;
+      document.getElementById("speaker-questions").style.display = role === "speaker" ? "" : "none";
+      document.getElementById("activity_role_other").style.display = role === "other" ? "" : "none";
+    }
+    form.addEventListener("change", update);
+    update();
+  })();
+</script>
+{% elif version %}
+<p class="muted">Your program's questionnaire is entered by the program office; contact them to declare.</p>
+{% endif %}
+{% endblock %}

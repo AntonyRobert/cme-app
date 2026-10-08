@@ -11,5 +11,6 @@ urlpatterns = [
     path("", include("signin.urls")),
     path("", include("attendance.urls")),
     path("", include("credits.urls")),
+    path("", include("rounds.urls")),
     path("", RedirectView.as_view(pattern_name="signin:me", permanent=False), name="home"),
 ]

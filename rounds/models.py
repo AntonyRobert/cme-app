@@ -45,6 +45,15 @@ def coi_questions(version):
         raise LookupError(f"No conflict-of-interest questionnaire version {version!r}.")
 
 
+def coi_is_national_standard(version):
+    """Laid out as the National Standard form (binary, two columns, role, speaker questions, attestation)."""
+    return version in settings.COI_NATIONAL_STANDARD_VERSIONS
+
+
+def coi_standard():
+    return settings.COI_STANDARD
+
+
 def coi_validity():
     return datetime.timedelta(days=settings.COI_VALIDITY_DAYS)
 
@@ -153,6 +162,29 @@ class RoundsEvent(UUIDModel):
             if self.accredited_credits is None:
                 self.accredited_credits = self.program.default_accredited_credits
 
+    def undeclared_presenters(self):
+        """
+        [SessionPresenter] on this event with no declaration attached. The
+        National Standard says anyone who fails to disclose cannot
+        participate as an SPC member, speaker, moderator, facilitator or
+        author, so these block publication.
+        """
+        if not self.pk:
+            return []
+        return list(
+            SessionPresenter.objects.filter(session__event=self, coi_declaration__isnull=True)
+            .select_related("person", "session")
+            .order_by("session__position", "position")
+        )
+
+    def publication_blockers(self):
+        """Human-readable reasons this event cannot be published; empty means it can."""
+        return [
+            f"{sp.person} (session {sp.session.position}, {sp.session.title}) has no "
+            "conflict-of-interest declaration on file."
+            for sp in self.undeclared_presenters()
+        ]
+
     def clean(self):
         super().clean()
         self._fill_defaults()
@@ -162,6 +194,19 @@ class RoundsEvent(UUIDModel):
             raise ValidationError(
                 {"status": "A closed event stays closed. Its totals are frozen."}
             )
+        moving_to_published = (
+            self.status == self.Status.PUBLISHED and self._stored_status() != self.Status.PUBLISHED
+        )
+        if moving_to_published:
+            blockers = self.publication_blockers()
+            if blockers:
+                raise ValidationError(
+                    {
+                        "status": "Cannot publish: a presenter has not disclosed. "
+                        + " ".join(blockers)
+                        + " Anyone who fails to disclose cannot participate (National Standard)."
+                    }
+                )
 
     def save(self, *args, **kwargs):
         if self._stored_status() == self.Status.CLOSED and not self.is_closed:
@@ -172,9 +217,14 @@ class RoundsEvent(UUIDModel):
 
 class COIDeclarationQuerySet(PersonOwnedQuerySet):
     def valid_on(self, on_date):
-        """Declarations in force on a date: made on or before it, less than a year earlier."""
-        day_after = datetime.datetime.combine(
-            on_date + datetime.timedelta(days=1), datetime.time.min, tzinfo=datetime.timezone.utc
+        """
+        Declarations in force on a date: made on or before it, less than a
+        year earlier. Days are local days: a declaration made at 21:00 in
+        Montreal is in force that evening, although it is already tomorrow
+        in UTC.
+        """
+        day_after = timezone.make_aware(
+            datetime.datetime.combine(on_date + datetime.timedelta(days=1), datetime.time.min)
         )
         return self.filter(declared_at__lt=day_after, declared_at__gte=day_after - coi_validity())
 
@@ -201,12 +251,43 @@ class COIDeclaration(AppendOnlyMixin, UUIDModel):
     year from declared_at, rolling. Write one with rounds.coi.declare().
     """
 
+    class Role(models.TextChoices):
+        SPC_MEMBER = "spc_member", "Scientific planning committee member"
+        MODERATOR = "moderator", "Moderator"
+        SPEAKER = "speaker", "Speaker"
+        AUTHOR = "author", "Author"
+        FACILITATOR = "facilitator", "Facilitator"
+        OTHER = "other", "Other"
+
     person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name="coi_declarations")
     declared_at = models.DateTimeField(default=timezone.now)
     disclosure_text_version = models.CharField(
         max_length=50,
         help_text="Which questionnaire was answered. The declaration always shows that "
         "version's wording.",
+    )
+    # --- The National Standard form's own fields. Blank on legacy declarations. ---
+    activity_role = models.CharField(
+        max_length=20, choices=Role.choices, blank=True, help_text="Role in the activity."
+    )
+    activity_role_other = models.CharField(max_length=200, blank=True)
+    has_relationships = models.BooleanField(
+        null=True,
+        blank=True,
+        help_text="The form's top-level answer. No writes an explicit no to every category.",
+    )
+    # Speaker-only. Null unless the role is speaker.
+    off_label = models.BooleanField(
+        null=True, blank=True, help_text="Intends to recommend off-label use of medication."
+    )
+    generic_names_acknowledged = models.BooleanField(
+        null=True,
+        blank=True,
+        help_text="Acknowledges the generic-names requirement. A no is flagged for the program admin.",
+    )
+    attested = models.BooleanField(default=False, help_text="'I agree' was ticked.")
+    attested_name = models.CharField(
+        max_length=400, blank=True, help_text="The declarant's name as it was when they agreed."
     )
 
     objects = COIDeclarationQuerySet.as_manager()
@@ -231,10 +312,44 @@ class COIDeclaration(AppendOnlyMixin, UUIDModel):
         return coi_questions(self.disclosure_text_version)
 
     @property
+    def is_national_standard(self):
+        return coi_is_national_standard(self.disclosure_text_version)
+
+    @property
+    def is_speaker(self):
+        return self.activity_role == self.Role.SPEAKER
+
+    @property
+    def role_label(self):
+        if not self.activity_role:
+            return ""
+        label = self.get_activity_role_display()
+        if self.activity_role == self.Role.OTHER and self.activity_role_other:
+            label = f"{label}: {self.activity_role_other}"
+        return label
+
+    @property
     def is_complete(self):
-        """Every question of its version has an answer. Unanswered is not "no"."""
+        """
+        Every question of its version has an answer; unanswered is not "no".
+        On the National Standard form also: a role, the top-level answer, the
+        speaker questions when the role is speaker, and the attestation.
+        """
         answered = {r.question_key for r in self.responses.all()}
-        return answered >= {key for key, _ in self.questions}
+        if not answered >= {key for key, _ in self.questions}:
+            return False
+        if not self.is_national_standard:
+            return True
+        if not self.activity_role or self.has_relationships is None or not self.attested:
+            return False
+        if self.is_speaker and (self.off_label is None or self.generic_names_acknowledged is None):
+            return False
+        return True
+
+    @property
+    def needs_review(self):
+        """A speaker who would not acknowledge the generic-names requirement."""
+        return self.generic_names_acknowledged is False
 
     @property
     def has_conflict(self):
@@ -249,18 +364,19 @@ class COIDeclaration(AppendOnlyMixin, UUIDModel):
 
     def rendered(self):
         """
-        [(question text, has_conflict or None, details)] in question order,
-        using the wording of this declaration's own version. None means
-        unanswered.
+        [(question text, has_conflict or None, organizations, description)] in
+        question order, using the wording of this declaration's own version.
+        None means unanswered. Legacy declarations have their one explanation
+        in the description column and nothing in organizations.
         """
         answers = {r.question_key: r for r in self.responses.all()}
         rows = []
         for key, text in self.questions:
             response = answers.get(key)
             if response is None:
-                rows.append((text, None, ""))
+                rows.append((text, None, "", ""))
             else:
-                rows.append((text, response.has_conflict, response.details))
+                rows.append((text, response.has_conflict, response.organizations, response.relationship_description))
         return rows
 
     def clean(self):
@@ -272,14 +388,23 @@ class COIDeclaration(AppendOnlyMixin, UUIDModel):
 
 
 class COIResponse(AppendOnlyMixin, UUIDModel):
-    """One answer on a declaration. A yes needs an explanation."""
+    """
+    One answer on a declaration. A yes names the organization(s) and
+    describes the relationship(s), the form's two columns. Legacy
+    declarations carried one explanation; it lives in the description.
+    """
 
     declaration = models.ForeignKey(
         COIDeclaration, on_delete=models.CASCADE, related_name="responses"
     )
     question_key = models.CharField(max_length=50)
     has_conflict = models.BooleanField()
-    details = models.TextField(blank=True, help_text="Required when the answer is yes.")
+    organizations = models.TextField(
+        blank=True, help_text="Name of for-profit or not-for-profit organization(s). Required when yes."
+    )
+    relationship_description = models.TextField(
+        blank=True, help_text="Description of relationship(s). Required when yes."
+    )
 
     class Meta:
         verbose_name = "COI response"
@@ -288,9 +413,19 @@ class COIResponse(AppendOnlyMixin, UUIDModel):
             models.UniqueConstraint(
                 fields=["declaration", "question_key"], name="coiresponse_one_per_question"
             ),
+            # Every version needs the description on a yes; the National Standard
+            # form needs the organizations too, which the model and the service
+            # enforce (a check constraint cannot see the parent's version).
+            # Every version needs the description on a yes; the National Standard
+            # form needs the organizations too, which the model and the service
+            # enforce (a check constraint cannot see the parent's version).
             models.CheckConstraint(
-                condition=Q(has_conflict=False) | ~Q(details=""),
-                name="coiresponse_yes_needs_details",
+                condition=Q(has_conflict=False) | ~Q(relationship_description=""),
+                name="coiresponse_yes_needs_description",
+            ),
+            models.CheckConstraint(
+                condition=Q(has_conflict=True) | (Q(organizations="") & Q(relationship_description="")),
+                name="coiresponse_no_is_blank",
             ),
         ]
 
@@ -299,8 +434,15 @@ class COIResponse(AppendOnlyMixin, UUIDModel):
 
     def clean(self):
         super().clean()
-        if self.has_conflict and not (self.details or "").strip():
-            raise ValidationError({"details": "Explain the conflict."})
+        if self.has_conflict and not (self.relationship_description or "").strip():
+            raise ValidationError({"relationship_description": "Describe the relationship(s)."})
+        if (
+            self.has_conflict
+            and self.declaration_id
+            and self.declaration.is_national_standard
+            and not (self.organizations or "").strip()
+        ):
+            raise ValidationError({"organizations": "Name the organization(s)."})
         if self.declaration_id:
             keys = {key for key, _ in self.declaration.questions}
             if self.question_key not in keys:
@@ -443,6 +585,14 @@ class SessionPresenter(UUIDModel):
         on_delete=models.PROTECT,
         related_name="session_presenters",
         help_text="Blank picks up the presenter's current declaration, if they have one.",
+    )
+    # The approved form is per activity; ours is a standing declaration. A
+    # reused declaration is confirmed by the presenter for this session, and
+    # when is recorded here. Never silently.
+    coi_confirmed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the presenter confirmed the attached declaration is still accurate for this session.",
     )
 
     objects = PersonOwnedQuerySet.as_manager()

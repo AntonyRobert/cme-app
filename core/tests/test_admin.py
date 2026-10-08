@@ -600,40 +600,51 @@ def test_a_declaration_entered_by_staff_is_logged_and_cannot_be_edited(client, b
         "person": haddad.pk,
         "declared_at_0": "2026-10-01",
         "declared_at_1": "09:00:00",
-        "disclosure_text_version": "2026-10",
-        "q_equity": "on",  # a yes with no explanation: refused
+        "disclosure_text_version": "v2026-national-standard",
+        "activity_role": "speaker",
+        "has_relationships": "yes",
+        "q_patents": "on",  # a yes with neither column filled: refused
+        "off_label": "no",
+        "generic_names": "yes",
+        "attested": "on",
     }
     refused = client.post(url(COIDeclaration, "add"), form)
     assert refused.status_code == 200
-    assert "q_equity_details" in refused.context["adminform"].form.errors
+    errors = str(refused.context["adminform"].form.errors) + str(refused.context["adminform"].form.non_field_errors())
+    assert "organization" in errors.lower() and "relationship" in errors.lower()
 
-    form["q_equity_details"] = "Shares in Acme Devices"
+    form["q_patents_organizations"] = "Acme Devices"
+    form["q_patents_details"] = "Co-inventor on a monitoring patent"
     response = client.post(url(COIDeclaration, "add"), form)
     assert response.status_code == 302, response.context["adminform"].form.errors
     declaration = COIDeclaration.objects.get(person=haddad)
-    assert declaration.is_complete
-    assert [yes for _, yes, _ in declaration.rendered()] == [False, False, False, True, False, False, False]
-    assert declaration.responses.get(question_key="equity").details == "Shares in Acme Devices"
+    assert declaration.is_complete and declaration.activity_role == "speaker"
+    assert [yes for _, yes, _, _ in declaration.rendered()] == [False, False, False, True, False]
+    patent = declaration.responses.get(question_key="patents")
+    assert (patent.organizations, patent.relationship_description) == ("Acme Devices", "Co-inventor on a monitoring patent")
     entry = AuditLog.objects.get(action="coi.declared", object_id=str(declaration.pk))
     assert (entry.actor_user, entry.metadata["entered_by_staff"]) == (boss, True)
 
     page = client.get(url(COIDeclaration, "change", declaration.pk)).content.decode()
-    assert "Equity or ownership" in page and "Shares in Acme Devices" in page
-    client.post(url(COIDeclaration, "change", declaration.pk), {"q_other": "on", "q_other_details": "x"})
-    assert declaration.responses.get(question_key="other").has_conflict is False
+    assert "Patents on a drug, product or device" in page and "Acme Devices" in page
+    assert "Disclosure:" in page  # the slide text is shown to staff too
+    client.post(url(COIDeclaration, "change", declaration.pk), {"q_other_interests": "on"})
+    assert declaration.responses.get(question_key="other_interests").has_conflict is False
 
 
-def test_nothing_ticked_is_an_explicit_no_to_every_question(client, boss, seeded):
+def test_no_relationship_to_disclose_is_an_explicit_no_to_every_category(client, boss, seeded):
     roy = who("Roy")
     response = client.post(
         url(COIDeclaration, "add"),
         {"person": roy.pk, "declared_at_0": "2026-10-01", "declared_at_1": "09:00:00",
-         "disclosure_text_version": "2026-10"},
+         "disclosure_text_version": "v2026-national-standard", "activity_role": "moderator",
+         "has_relationships": "no", "attested": "on"},
     )
     assert response.status_code == 302, response.context["adminform"].form.errors
     declaration = COIDeclaration.objects.get(person=roy)
-    assert declaration.responses.count() == 7
+    assert declaration.responses.count() == 5
     assert declaration.has_conflict is False and declaration.is_complete
+    assert declaration.has_relationships is False and declaration.attested_name == roy.full_name
 
 
 def test_a_duplicate_licence_is_reported_on_the_form(client, boss, seeded):

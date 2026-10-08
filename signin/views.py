@@ -13,6 +13,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_http_methods, require_POST
 
 from core.authz import public_object
+from rounds.models import SessionPresenter
 from credits.windows import (
     STATE_EVENT_CLOSED,
     STATE_CAN_REQUEST,
@@ -178,6 +179,7 @@ def me(request):
         "signin/me.html",
         {
             "person": request.person,
+            "presents": SessionPresenter.objects.filter(person=request.person).exists(),
             "drafts": drafts,
             "activity_drafts": activity_drafts,
             "programs": programs,

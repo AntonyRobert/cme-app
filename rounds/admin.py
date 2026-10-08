@@ -32,7 +32,9 @@ from .models import (
     RoundsEvent,
     Session,
     SessionPresenter,
+    coi_is_national_standard,
     coi_questions,
+    coi_standard,
 )
 
 
@@ -126,12 +128,12 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
     date_hierarchy = "date"
     search_fields = ["title", "teams_meeting_title", "sessions__title"]
     inlines = [SessionInline]
-    readonly_fields = ["credit_summary", "attendance_links"]
+    readonly_fields = ["credit_summary", "attendance_links", "publication_state"]
     fieldsets = [
         (
             None,
             {
-                "fields": ["program", "title", "date", "status", "accredited_credits", "evaluation_form", "attendance_links"],
+                "fields": ["program", "title", "date", "status", "publication_state", "accredited_credits", "evaluation_form", "attendance_links"],
                 "description": "A blank title takes the program's series name; blank credits "
                 "take the program's default.",
             },
@@ -212,6 +214,18 @@ class RoundsEventAdmin(ProgramScopedAdminMixin, BaseAdmin):
             ),
             *super().get_urls(),
         ]
+
+    @admin.display(description="Publication")
+    def publication_state(self, obj):
+        if not obj.pk:
+            return "-"
+        blockers = obj.publication_blockers()
+        if not blockers:
+            return "Every presenter has a declaration on file." if obj.sessions.exists() else "-"
+        return format_html(
+            "<strong>Cannot be published until:</strong><ul>{}</ul>",
+            format_html_join("", "<li>{}</li>", ((b,) for b in blockers)),
+        )
 
     @admin.display(description="Attendance")
     def attendance_links(self, obj):
@@ -484,13 +498,23 @@ class SessionPresenterInline(admin.TabularInline):
         if not obj.pk:
             return "Picked up from the presenter's current declaration on save"
         if obj.coi_declaration_id is None:
-            return format_html("<strong>{}</strong>", "No declaration on file")
+            return format_html("<strong>{}</strong>", "No declaration on file: blocks publishing")
         declaration = obj.coi_declaration
-        return format_html(
-            "{} on {}",
-            admin_link(declaration, declaration.summary.capitalize()),
-            timezone.localdate(declaration.declared_at),
-        )
+        parts = [
+            format_html(
+                "{} on {}{}",
+                admin_link(declaration, declaration.summary.capitalize()),
+                timezone.localdate(declaration.declared_at),
+                f" ({declaration.role_label})" if declaration.role_label else "",
+            )
+        ]
+        if obj.coi_confirmed_at:
+            parts.append(format_html("confirmed for this session {}", timezone.localdate(obj.coi_confirmed_at)))
+        else:
+            parts.append("reused, not yet confirmed for this session by the presenter")
+        if declaration.needs_review:
+            parts.append(format_html("<strong>{}</strong>", "REVIEW: did not acknowledge the generic-names requirement"))
+        return format_html_join(mark_safe("<br>"), "{}", ((p,) for p in parts))
 
 
 class LearningObjectiveInline(admin.TabularInline):
@@ -642,9 +666,10 @@ class ValidityFilter(admin.SimpleListFilter):
 
 class COIDeclarationForm(SafeModelForm):
     """
-    One yes/no and an explanation box per question of the current
-    questionnaire. Leaving every box unticked is an explicit no to each
-    question, which is what gets written.
+    The program's current questionnaire, entered by staff on the declarant's
+    behalf. On the National Standard form: role, the top-level yes/no, a
+    tick plus the two columns per category, the two speaker questions and
+    the attestation. The wording is the form's, not ours.
     """
 
     class Meta:
@@ -654,6 +679,7 @@ class COIDeclarationForm(SafeModelForm):
     def __init__(self, *args, current_version=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.current_version = current_version or settings.COI_CURRENT_VERSION
+        self.standard = coi_is_national_standard(self.current_version)
         self.fields["disclosure_text_version"].widget = forms.Select(
             choices=[(v, v) for v in settings.COI_QUESTIONS]
         )
@@ -662,23 +688,74 @@ class COIDeclarationForm(SafeModelForm):
             "The questions below are your program's current version. Choose another only to "
             "transcribe a declaration made on an older form."
         )
+        std = coi_standard()
+        if self.standard:
+            self.fields["activity_role"] = forms.ChoiceField(
+                label="Role in the activity", choices=[("", "---------")] + list(std["roles"])
+            )
+            self.fields["activity_role_other"] = forms.CharField(
+                required=False, label="Other role", max_length=200
+            )
+            self.fields["has_relationships"] = forms.ChoiceField(
+                label="Disclosure",
+                widget=forms.RadioSelect,
+                choices=[("no", std["binary"]["no"]), ("yes", std["binary"]["yes"])],
+                help_text=std["preamble"],
+            )
+        organizations_label, description_label = std["columns"]
         for key, text in coi_questions(self.current_version):
             self.fields[f"q_{key}"] = forms.BooleanField(required=False, label=text)
+            if self.standard:
+                self.fields[f"q_{key}_organizations"] = forms.CharField(
+                    required=False, label=organizations_label, widget=forms.Textarea(attrs={"rows": 2})
+                )
             self.fields[f"q_{key}_details"] = forms.CharField(
                 required=False,
-                label="Details",
+                label=description_label if self.standard else "Details",
                 widget=forms.Textarea(attrs={"rows": 2}),
                 help_text="Required when the answer is yes.",
             )
+        if self.standard:
+            yes_no = [("", "---------"), ("yes", "Yes"), ("no", "No")]
+            self.fields["off_label"] = forms.ChoiceField(
+                required=False, label=std["speaker"]["off_label"]["text"],
+                help_text=std["speaker"]["off_label"]["help"] + " (speakers only)", choices=yes_no,
+            )
+            self.fields["generic_names"] = forms.ChoiceField(
+                required=False, label=std["speaker"]["generic_names"]["text"],
+                help_text="(speakers only) A no is flagged for review.", choices=yes_no,
+            )
+            self.fields["attested"] = forms.BooleanField(required=False, label="I agree", help_text=std["attestation"])
 
     def answers(self):
         version = self.cleaned_data.get("disclosure_text_version") or self.current_version
+        if self.standard:
+            return {
+                key: (
+                    bool(self.cleaned_data.get(f"q_{key}")),
+                    self.cleaned_data.get(f"q_{key}_organizations", ""),
+                    self.cleaned_data.get(f"q_{key}_details", ""),
+                )
+                for key, _ in coi_questions(version)
+            }
         return {
-            key: (
-                bool(self.cleaned_data.get(f"q_{key}")),
-                self.cleaned_data.get(f"q_{key}_details", ""),
-            )
+            key: (bool(self.cleaned_data.get(f"q_{key}")), self.cleaned_data.get(f"q_{key}_details", ""))
             for key, _ in coi_questions(version)
+        }
+
+    def extras(self):
+        """The National Standard fields, as declare() takes them."""
+        if not self.standard:
+            return {}
+        c = self.cleaned_data
+        tri = {"yes": True, "no": False, "": None}
+        return {
+            "role": c.get("activity_role") or None,
+            "role_other": c.get("activity_role_other", ""),
+            "has_relationships": tri[c.get("has_relationships", "")],
+            "off_label": tri[c.get("off_label", "")],
+            "generic_names": tri[c.get("generic_names", "")],
+            "attested": bool(c.get("attested")),
         }
 
     def clean(self):
@@ -691,10 +768,32 @@ class COIDeclarationForm(SafeModelForm):
                 "declarations are read-only.",
             )
             return cleaned
-        for key, text in coi_questions(version):
-            if cleaned.get(f"q_{key}") and not (cleaned.get(f"q_{key}_details") or "").strip():
-                self.add_error(f"q_{key}_details", f"Explain the conflict for: {text}.")
+        from .coi import validate_declaration
+
+        errors, _, _ = validate_declaration(self.answers(), version=version, **self.extras())
+        for key, message in errors.items():
+            field = key
+            if key.endswith("_organizations"):
+                field = f"q_{key}"
+            elif key.endswith("_description"):
+                field = f"q_{key[: -len('_description')]}_details"
+            elif key in dict(coi_questions(version)):
+                field = f"q_{key}"
+            self.add_error(field if field in self.fields else None, message)
         return cleaned
+
+
+class NeedsReviewFilter(admin.SimpleListFilter):
+    title = "needs review"
+    parameter_name = "review"
+
+    def lookups(self, request, model_admin):
+        return [("yes", "Speaker declined the generic-names acknowledgement")]
+
+    def queryset(self, request, queryset):
+        if self.value() == "yes":
+            return queryset.filter(generic_names_acknowledged=False)
+        return queryset
 
 
 @admin.register(COIDeclaration)
@@ -704,15 +803,34 @@ class COIDeclarationAdmin(AppendOnlyAdmin):
     here is staff acting on the presenter's behalf, and is logged as such.
     """
 
-    list_display = ["person", "answers_summary", "declared_at", "valid_to", "disclosure_text_version"]
-    list_filter = [ValidityFilter, "disclosure_text_version"]
+    list_display = ["person", "answers_summary", "role", "review", "declared_at", "valid_to", "disclosure_text_version"]
+    list_filter = [ValidityFilter, NeedsReviewFilter, "disclosure_text_version", "activity_role"]
     search_fields = [
         "person__family_name",
         "person__given_name",
         "responses__details",
     ]
     autocomplete_fields = ["person"]
-    readonly_fields = ["answers", "valid_to"]
+    readonly_fields = ["answers", "valid_to", "role_and_attestation", "slide"]
+
+    @admin.display(description="Role, speaker answers, attestation")
+    def role_and_attestation(self, obj):
+        if not obj.is_national_standard:
+            return "Legacy form: no role, speaker questions or attestation were asked."
+        std = coi_standard()
+        yn = {True: "Yes", False: "No", None: "-"}
+        rows = [("Role", obj.role_label or "-"), ("Relationship to disclose", yn[obj.has_relationships])]
+        if obj.is_speaker:
+            rows.append((std["speaker"]["off_label"]["text"], yn[obj.off_label]))
+            rows.append((std["speaker"]["generic_names"]["text"], yn[obj.generic_names_acknowledged] + (" (REVIEW)" if obj.needs_review else "")))
+        rows.append(("Attested", f"{'Yes' if obj.attested else 'No'}: {obj.attested_name} on {timezone.localdate(obj.declared_at)}"))
+        return format_html("<table>{}</table>", format_html_join("", "<tr><th style='text-align:left'>{}</th><td>{}</td></tr>", rows))
+
+    @admin.display(description="Text for the slide")
+    def slide(self, obj):
+        from .coi import slide_text
+
+        return format_html("<pre style='white-space:pre-wrap'>{}</pre>", slide_text(obj))
 
     def current_version_for(self, request):
         """The questionnaire version of the staff member's programs (the first, if several)."""
@@ -742,19 +860,34 @@ class COIDeclarationAdmin(AppendOnlyAdmin):
     def get_fieldsets(self, request, obj=None):
         if obj is not None:
             return [
-                (None, {"fields": ["person", "declared_at", "valid_to", "disclosure_text_version"]}),
+                (None, {"fields": ["person", "declared_at", "valid_to", "disclosure_text_version", "role_and_attestation"]}),
                 ("Answers, in the wording of that version", {"fields": ["answers"]}),
+                ("Disclosure slide", {"fields": ["slide"]}),
             ]
-        question_fields = []
-        for key, _ in coi_questions(self.current_version_for(request)):
-            question_fields.append((f"q_{key}", f"q_{key}_details"))
+        version = self.current_version_for(request)
+        if not coi_is_national_standard(version):
+            question_fields = [(f"q_{key}", f"q_{key}_details") for key, _ in coi_questions(version)]
+            return [
+                (None, {"fields": ["person", "declared_at", "disclosure_text_version"]}),
+                (
+                    "Does the presenter have any of the following? Tick what applies and explain. "
+                    "Nothing ticked means no to every question.",
+                    {"fields": question_fields},
+                ),
+            ]
+        std = coi_standard()
+        question_fields = [
+            (f"q_{key}", f"q_{key}_organizations", f"q_{key}_details") for key, _ in coi_questions(version)
+        ]
         return [
-            (None, {"fields": ["person", "declared_at", "disclosure_text_version"]}),
+            (None, {"fields": ["person", "declared_at", "disclosure_text_version", "activity_role", "activity_role_other"]}),
+            ("Disclosure", {"fields": ["has_relationships"], "description": std["preamble"]}),
             (
-                "Does the presenter have any of the following? Tick what applies and explain. "
-                "Nothing ticked means no to every question.",
+                "Relationships, by category (only when there is one to disclose)",
                 {"fields": question_fields},
             ),
+            ("Speakers only", {"fields": ["off_label", "generic_names"]}),
+            ("Attestation", {"fields": ["attested"]}),
         ]
 
     def get_queryset(self, request):
@@ -770,12 +903,21 @@ class COIDeclarationAdmin(AppendOnlyAdmin):
             declared_at=form.cleaned_data.get("declared_at"),
             user=request.user,
             request=request,
+            **form.extras(),
         )
         obj.__dict__.update(declaration.__dict__)
 
     @admin.display(description="Answers")
     def answers_summary(self, obj):
         return obj.summary
+
+    @admin.display(description="Role")
+    def role(self, obj):
+        return obj.role_label or "-"
+
+    @admin.display(description="Review", boolean=True)
+    def review(self, obj):
+        return obj.needs_review
 
     @admin.display(description="Valid to")
     def valid_to(self, obj):
@@ -785,13 +927,17 @@ class COIDeclarationAdmin(AppendOnlyAdmin):
     def answers(self, obj):
         if not obj.pk:
             return "-"
+        organizations_label, description_label = coi_standard()["columns"]
         rows = format_html_join(
             "",
-            "<tr><td>{}</td><td><strong>{}</strong></td><td>{}</td></tr>",
+            "<tr><td>{}</td><td><strong>{}</strong></td><td>{}</td><td>{}</td></tr>",
             (
-                (text, "Unanswered" if yes is None else ("Yes" if yes else "No"), details)
-                for text, yes, details in obj.rendered()
+                (text, "Unanswered" if yes is None else ("Yes" if yes else "No"), organizations, description)
+                for text, yes, organizations, description in obj.rendered()
             ),
+        )
+        rows = format_html(
+            "<tr><th></th><th></th><th>{}</th><th>{}</th></tr>{}", organizations_label, description_label, rows
         )
         note = "" if obj.is_complete else " This declaration is incomplete and is not in force."
         return format_html(

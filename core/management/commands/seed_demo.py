@@ -125,14 +125,26 @@ class Command(BaseCommand):
             LearningObjective.objects.create(session=session, position=order, text=text)
         return session
 
-    def declare(self, person, conflicts=None):
-        """A declaration made 40 days ago: no to everything, or yes where `conflicts` says."""
+    def declare(self, person, conflicts=None, role="speaker"):
+        """
+        A declaration on the National Standard form, made 40 days ago: no
+        relationship to disclose, or yes where `conflicts` gives
+        {category: (organizations, description)}.
+        """
         version = self.program.coi_question_version
-        answers = {key: (False, "") for key, _ in coi_questions(version)}
-        for key, details in (conflicts or {}).items():
-            answers[key] = (True, details)
+        answers = {key: (False, "", "") for key, _ in coi_questions(version)}
+        for key, (organizations, description) in (conflicts or {}).items():
+            answers[key] = (True, organizations, description)
         return declare(
-            person, answers, version=version, declared_at=timezone.now() - datetime.timedelta(days=40)
+            person,
+            answers,
+            version=version,
+            role=role,
+            has_relationships=bool(conflicts),
+            off_label=False,
+            generic_names=True,
+            attested=True,
+            declared_at=timezone.now() - datetime.timedelta(days=40),
         )
 
     def teams(self, event, upload, name, start, end, person=None, email=None, role="Attendee"):
@@ -263,8 +275,8 @@ class Command(BaseCommand):
         self.declare(
             gagnon,
             {
-                "consulting": "Advisory board member, Acme Patient Monitoring.",
-                "speaker_fees": "Honoraria from Acme Patient Monitoring, 2025.",
+                "advisory_boards": ("Acme Patient Monitoring", "Advisory board member since 2024."),
+                "direct_payments": ("Acme Patient Monitoring", "Honoraria for two talks, 2025."),
             },
         )
         for presenter in (sharma, cote, okafor):

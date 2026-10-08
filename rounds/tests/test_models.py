@@ -213,7 +213,7 @@ def test_no_conflicts_writes_an_explicit_no_to_every_question():
     assert declaration.is_complete
     assert declaration.has_conflict is False
     assert declaration.summary == "no conflicts"
-    assert [yes for _, yes, _ in declaration.rendered()] == [False] * 7
+    assert [yes for _, yes, _, _ in declaration.rendered()] == [False] * 7
     assert declaration.responses.count() == 7
 
 
@@ -222,7 +222,7 @@ def test_an_unanswered_declaration_is_not_an_attested_no():
     assert blank.responses.count() == 0
     assert blank.is_complete is False
     assert blank.summary == "incomplete"
-    assert [yes for _, yes, _ in blank.rendered()] == [None] * 7
+    assert [yes for _, yes, _, _ in blank.rendered()] == [None] * 7
 
 
 def test_an_incomplete_declaration_is_rejected():
@@ -250,10 +250,10 @@ def test_a_yes_without_details_is_rejected():
     answers["speaker_fees"] = (True, "   ")
     with pytest.raises(ValidationError) as err:
         declare(person, answers, version="2026-10")
-    assert "speaker_fees" in err.value.message_dict
+    assert "speaker_fees_description" in err.value.message_dict  # the yes needs its description
     with pytest.raises(IntegrityError), transaction.atomic():
         COIResponse.objects.create(
-            declaration=declare_none(person), question_key="speaker_fees", has_conflict=True, details=""
+            declaration=declare_none(person), question_key="speaker_fees", has_conflict=True, relationship_description=""
         )
 
 
@@ -261,7 +261,7 @@ def test_a_yes_with_details_is_recorded_and_summarised():
     declaration = declare_some(make_person())
     assert declaration.has_conflict is True
     assert declaration.summary == "1 conflict(s) declared"
-    assert ("Consulting or advisory roles", True, "Advisory board, Acme Devices") in declaration.rendered()
+    assert ("Consulting or advisory roles", True, "", "Advisory board, Acme Devices") in declaration.rendered()
 
 
 def test_an_old_declaration_renders_with_its_own_versions_wording(settings):
@@ -280,10 +280,10 @@ def test_an_old_declaration_renders_with_its_own_versions_wording(settings):
     }
     old = declare_none(make_person(), version="2026-10")
     new = declare_no_conflicts(make_person(), version="2027-01")  # a program moved to it
-    assert [text for text, _, _ in old.rendered()][0] == "Research funding or grants"
+    assert [text for text, _, _, _ in old.rendered()][0] == "Research funding or grants"
     assert len(old.rendered()) == 7
     assert old.is_complete  # judged against its own version, not the current one
-    assert [text for text, _, _ in new.rendered()][0] == "Grants, including in kind"
+    assert [text for text, _, _, _ in new.rendered()][0] == "Grants, including in kind"
     assert len(new.rendered()) == 8
     assert new.disclosure_text_version == "2027-01"
 
