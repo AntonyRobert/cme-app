@@ -106,3 +106,31 @@ def test_the_caddy_site_template_has_no_bare_lines_caddy_would_read_as_directive
         assert stripped.split()[0] in directives, f"not a directive: {line!r}"
     assert "__" not in rendered  # every placeholder substituted
     assert rendered.count("{") == rendered.count("}")
+
+
+def test_backup_goes_to_s3_with_the_agreed_retention_and_fails_loudly():
+    backup = (ROOT / "deploy" / "backup.sh").read_text(encoding="utf-8")
+    assert "restic backup" in backup and '"$UPLOADS"' in backup and '"$DUMP"' in backup
+    assert "restic forget" in backup and "--keep-daily 7 --keep-weekly 5 --keep-monthly 12 --prune" in backup
+    assert "set -euo pipefail" in backup  # any failed step fails the unit
+    for var in ("RESTIC_REPOSITORY", "RESTIC_PASSWORD", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
+        assert f"${{{var}:?" in backup  # refuses to run half-configured
+    assert "echo $RESTIC" not in backup and "echo $AWS" not in backup
+    unit = (ROOT / "deploy" / "cme-backup@.service").read_text(encoding="utf-8")
+    assert "OnFailure=cme-backup-failed@%i.service" in unit
+    assert "/etc/cme/%i.backup.env" in unit and "backup.sh %i" in unit  # the org is the instance, never hardcoded
+    failed = (ROOT / "deploy" / "cme-backup-failed@.service").read_text(encoding="utf-8")
+    assert "-p user.err" in failed
+    setup = (ROOT / "deploy" / "server-setup.sh").read_text(encoding="utf-8")
+    assert "restic" in setup.split("apt-get install")[1] or " restic" in setup
+    assert "restic cat config" in setup and "restic init" in setup  # idempotent init
+    for f in ("backup.sh", "restore-test.sh", "cme-backup@.service", "cme-backup-failed@.service"):
+        assert "mcgill" not in (ROOT / "deploy" / f).read_text(encoding="utf-8")
+
+
+def test_the_restore_test_restores_from_s3_not_the_local_dump():
+    restore = (ROOT / "deploy" / "restore-test.sh").read_text(encoding="utf-8")
+    assert "restic restore" in restore and "restic snapshots" in restore
+    assert "/var/backups" not in restore  # the same disk proves nothing
+    assert "pg_restore" in restore and "_restoretest" in restore and "DROP DATABASE" in restore
+    assert "sha256sum" in restore  # uploads come back byte for byte

@@ -126,7 +126,8 @@ One instance per organisation. `<org>` is a short name such as `mcgill`; today t
 /srv/cme/<org>/staticfiles collected static files, served by Caddy
 /etc/cme/<org>.env        secrets and settings, mode 600, owned by root
 /run/cme/<org>/gunicorn.sock  gunicorn's socket; the directory is made by systemd (RuntimeDirectory) for the tenant user, 0750, caddy in the group
-/var/backups/cme/<org>/   nightly pg_dump and uploads tarball, 14 days
+/var/backups/cme/<org>/   local copy of the nightly dump, 14 days; the backup is in S3
+/etc/cme/<org>.backup.env restic repository, password and AWS keys; the backup unit only
 systemd: cme@<org>.service (gunicorn), cme-backup@<org>.timer; cme-cron@<org>.timer (reminders) comes with step 5
 Caddy: /etc/caddy/sites/<org>.caddy, reverse proxy <hostname> -> that socket, /static/ served directly
 Postgres 17 (PGDG): database cme_<org>, peer-auth roles cme_<org>_owner and cme_<org>
@@ -145,13 +146,40 @@ Then **Networking → Create static IP**, attach it to the instance (the default
 changes on stop/start). Firewall on the instance: keep **SSH 22** and **HTTP 80**, add
 **HTTPS 443**; nothing else. Postgres never listens on TCP. Set the billing budget alarm.
 
-## Backups and the restore drill
+## Backups
 
-`deploy/backup.sh` runs nightly from `cme-backup@<org>.timer`; `deploy/restore-test.sh`
-restores the latest dump into a scratch database and compares counts with live. The full
-drill (stop, drop, restore, re-grant, start) is written out in `deploy/README.md` and is
-done by hand after the first deploy. Off-box copies (restic to S3) are a commented block
-in `backup.sh` until the bucket exists.
+**restic to S3, nightly, per tenant.** `cme-backup@<org>.timer` runs `deploy/backup.sh`
+at 03:15: a `pg_dump` of the database and the whole `uploads/` directory (the raw Teams
+exports are the evidence behind credit claims and exist nowhere else; they matter as
+much as the database) go into the tenant's restic repository, then `restic forget
+--prune` keeps **7 daily, 5 weekly, 12 monthly**, then `restic check`. A local copy of
+the dump is kept 14 days as protection against a bad migration or a fat-fingered DELETE,
+and nothing else: **S3 is the copy that matters.**
+
+- **Bucket:** `mri3-cme-backups`, `ca-central-1`, versioning on. One bucket; **one
+  prefix, one restic password and one IAM user per tenant**
+  (`s3:s3.ca-central-1.amazonaws.com/mri3-cme-backups/<org>`), so no encryption key is
+  shared between institutions and Concordia's IAM user cannot read McGill's prefix.
+- **IAM policy shape**, per tenant user: `s3:ListBucket` on the bucket, with a condition
+  `s3:prefix` beginning with `<org>/`; `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`
+  on `arn:aws:s3:::mri3-cme-backups/<org>/*`; nothing else, no other bucket, no console.
+  (`DeleteObject` is needed by `forget --prune`; versioning on the bucket is what makes a
+  deleted or overwritten object recoverable anyway.)
+- **Credentials** go in `/etc/cme/<org>.backup.env` (root, 0600), read by the backup unit
+  only; the web process never carries them.
+- **RESTIC_PASSWORD must exist somewhere other than the server.** The repository is
+  encrypted with it. Without it the backups are unrecoverable even with full AWS
+  access: a lost password and a dead disk on the same day is total loss. Keep it in the
+  password manager with the other operational secrets, and keep that current.
+- **Failure is loud.** Any non-zero step fails the unit; `cme-backup-failed@<org>` logs at
+  error priority. A notification route (email once SES is live) is still to wire.
+- **The restore test reads from S3**, not from the local dump: `deploy/restore-test.sh`
+  pulls the latest snapshot, restores into a scratch database, compares counts and
+  checks the uploads byte for byte. The full drill is in `deploy/README.md`; it was run
+  by hand once with the database nearly empty, and is repeated quarterly.
+
+Backup retention (how long snapshots are kept) and `Program.retention_years` (how long
+records are kept in the live system) are separate decisions; the second is still open.
 
 ## Multi-tenant deployment
 

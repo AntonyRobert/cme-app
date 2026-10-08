@@ -18,7 +18,7 @@
 # settings, not secrets.
 #
 # What it sets up, in order:
-#   1. packages: Python 3.12 (Ubuntu's own), git, fail2ban, Postgres 17 (PGDG repo), Caddy (official repo)
+#   1. packages: Python 3.12 (Ubuntu's own), git, fail2ban, restic, Postgres 17 (PGDG repo), Caddy (official repo)
 #   2. OS users: cme_<org> (runs gunicorn, owns uploads) and cme_<org>_owner (runs migrate, owns the checkout)
 #   3. Postgres: two peer-authenticated roles matching those users, one database owned by the owner role
 #   4. directories per docs/deployment.md: /srv/cme/<org>, /etc/cme/<org>.env; the deploy key; the checkout (in place, pulled on reruns)
@@ -58,7 +58,7 @@ say "Packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q ca-certificates curl gnupg lsb-release git build-essential libpq-dev \
-  unattended-upgrades fail2ban
+  unattended-upgrades fail2ban restic
 
 # Python: Ubuntu 24.04's own 3.12. Django 5.2 supports it; a third-party PPA on
 # a box holding accreditation records is not worth a version bump that changes
@@ -222,11 +222,46 @@ chown -R "$OWNER_USER:$APP_USER" "$CHECKOUT/.git"
 say "systemd units"
 install -m 0644 "$HERE/cme@.service" /etc/systemd/system/cme@.service
 install -m 0644 "$HERE/cme-backup@.service" /etc/systemd/system/cme-backup@.service
+install -m 0644 "$HERE/cme-backup-failed@.service" /etc/systemd/system/cme-backup-failed@.service
 install -m 0644 "$HERE/cme-backup@.timer" /etc/systemd/system/cme-backup@.timer
 rm -f /etc/tmpfiles.d/cme.conf  # an earlier version made /run/cme root-owned here; the unit owns it now
 systemctl daemon-reload
 systemctl enable "cme@${ORG}" "cme-backup@${ORG}.timer"
 systemctl start "cme-backup@${ORG}.timer"
+
+# --- 5b. The restic repository ----------------------------------------------------------
+say "restic repository"
+# Credentials come from /etc/cme/<org>.backup.env (preferred: only the backup
+# unit reads it) or, as a fallback, the main env file. Nothing is printed.
+BACKUP_ENV="/etc/cme/${ORG}.backup.env"
+if [[ ! -f "$BACKUP_ENV" ]] && grep -q '^RESTIC_REPOSITORY=' "$ENV_FILE" 2>/dev/null; then
+  echo "Note: restic variables found in $ENV_FILE. Move them to $BACKUP_ENV so gunicorn does not carry them;"
+  echo "      the commands are in deploy/README.md under Backups."
+fi
+if [[ -f "$BACKUP_ENV" ]] || grep -q '^RESTIC_REPOSITORY=' "$ENV_FILE" 2>/dev/null; then
+  (
+    set -a
+    if [[ -f "$BACKUP_ENV" ]]; then
+      # shellcheck disable=SC1090
+      source "$BACKUP_ENV"
+    else
+      # shellcheck disable=SC1090
+      source "$ENV_FILE"
+    fi
+    set +a
+    export RESTIC_CACHE_DIR="/var/cache/restic/${ORG}"
+    install -d -m 0700 "$RESTIC_CACHE_DIR"
+    # Idempotent: succeed if the repository already exists, initialise it if not.
+    if restic cat config >/dev/null 2>&1; then
+      echo "repository exists; snapshots: $(restic snapshots --compact 2>/dev/null | tail -1)"
+    else
+      restic init --quiet && echo "repository initialised"
+    fi
+  )
+else
+  echo "No RESTIC_REPOSITORY yet: write $BACKUP_ENV (see deploy/env.backup.template) and rerun."
+  echo "Nightly backups FAIL until then, loudly."
+fi
 
 # --- 6. Caddy -------------------------------------------------------------------------
 say "Caddy"

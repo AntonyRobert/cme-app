@@ -1,0 +1,9 @@
+# Runs when cme-backup@%i fails. Today it logs at error priority, which is
+# what journalctl -p err and the status check surface; once SES is live, a
+# notification goes here (see deploy/README.md, "When a backup fails").
+[Unit]
+Description=CME backup FAILED (%i)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -p user.err -t cme-backup "BACKUP FAILED for tenant %i: run 'journalctl -u cme-backup@%i -n 50' and fix it today. Until it succeeds there is no current off-box copy."

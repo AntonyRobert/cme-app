@@ -375,9 +375,14 @@ and kept only so declarations made under it render as made.
 Unique on `(declaration, question_key)`; a no carries nothing in either column (check
 constraint).
 
-**The lookback is two years**, "over the previous 2 years, irrespective of the subject
-being discussed", stated in the preamble. That is separate from our one-year validity:
-people re-declare annually, each time covering the previous two years.
+**The lookback is two years.** The form is introduced with the standards page's own
+sentence (all SPC members, speakers, moderators, facilitators and authors must provide a
+written description of all relationships "irrespective of the subject being discussed,
+over the previous 2 years") and asks, verbatim, "Please indicate the organization(s)
+with which you have/had a relationship over the previous two years and briefly describe
+the nature of that relationship." Both are quoted, not paraphrased (`COI_STANDARD`).
+That is separate from our one-year validity: people re-declare annually, each time
+covering the previous two years.
 
 **Complete means** every category of its version has a response and, on the Standard
 form, a role, the top-level answer, the two speaker questions when the role is speaker,

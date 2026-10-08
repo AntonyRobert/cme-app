@@ -1,7 +1,21 @@
+# Nightly backup of one tenant to its restic repository in S3. %i is the org.
+# Fails on any non-zero exit, and OnFailure= makes the failure visible.
 [Unit]
-Description=CME nightly backup (%i)
-After=postgresql.service
+Description=CME nightly backup to S3 (%i)
+After=postgresql.service network-online.target
+Wants=network-online.target
+OnFailure=cme-backup-failed@%i.service
 
 [Service]
 Type=oneshot
+# The restic repository, its password and the AWS keys live in the backup
+# env file, read by this unit only; the web process never carries them.
+# The main env file is a fallback for a box where they were put there first.
+EnvironmentFile=-/etc/cme/%i.env
+EnvironmentFile=-/etc/cme/%i.backup.env
+# restic keeps its cache here; the dumps go to /var/backups/cme/%i.
+Environment=RESTIC_CACHE_DIR=/var/cache/restic/%i
+CacheDirectory=restic/%i
 ExecStart=/srv/cme/%i/deploy/backup.sh %i
+# A stuck upload must not hold the next night's run.
+TimeoutStartSec=4h

@@ -243,10 +243,12 @@ listed). Nothing pushed.
   template now logs to stderr (`journalctl -u caddy`) and a test refuses `output file`.
   Line 1 of the template was checked again (`cat -A`, on disk and on `origin/main`): it
   has always started with `#`.
-- **The preamble is assembled, not quoted.** You gave me the fragments ("over the
-  previous 2 years", "irrespective of the subject being discussed"); the sentence around
-  them is mine. Check it against the form before launch; it is one string in
-  `COI_STANDARD["preamble"]`.
+- **The intro and the question sentence are verbatim** from the standards page and the
+  form (your follow-up); the assembled sentence is gone. Checked on the same message:
+  declaring on the presenter page attaches the new declaration only to the person's own
+  upcoming sessions that have none, and never sets `coi_confirmed_at` (attach and
+  confirm are separate steps, tested); the slide already carried the off-label line
+  for yes and for no, now pinned by a test.
 - **The organizations column is enforced by the model and the service, not the
   database.** A check constraint cannot see the parent's version, and legacy rows have
   no organizations. The description is required by constraint on every version.

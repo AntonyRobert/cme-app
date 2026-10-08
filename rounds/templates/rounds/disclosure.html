@@ -58,6 +58,8 @@
 
 {% if standard %}
 <h2>{% if current %}Make a new declaration{% else %}Declare{% endif %}</h2>
+<p>{{ std.intro }}</p>
+<ul>{% for key, text in questions %}<li>{{ text }}</li>{% endfor %}</ul>
 <p>{{ std.preamble }}</p>
 <form method="post" id="disclosure-form">
   {% csrf_token %}

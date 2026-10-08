@@ -397,6 +397,17 @@ required), bias detail (free text, required only when bias is answered no), prac
 change and comments (free text, optional). Changing it later is a new version of the
 form, not an edit of what was answered.
 
+**Backups: restic to S3, nightly, one repository per tenant, kept 7 daily / 5 weekly /
+12 monthly.** The database dump and the uploads directory together; the raw Teams exports
+are evidence that exists nowhere else. One bucket, but a prefix, a restic password and an
+IAM user per institution, so there is no shared encryption key and no cross-tenant read.
+A local dump is kept too, as a convenience against operator mistakes; S3 is the backup.
+Failure is loud: the unit fails and logs at error priority. The restore test reads from
+S3, because a test that reads the same disk tests nothing. **Backup retention and
+`Program.retention_years` are separate decisions**: the first is how far back a restore
+can reach, the second is how long the live system keeps a person's records, and that one
+is still open (below).
+
 ## Open
 
 **Retention period.**

@@ -185,9 +185,17 @@ COI_STANDARD = {
     # from the one-year validity of a declaration here: people re-declare
     # annually, each time covering the previous two years.
     "lookback_years": 2,
+    # Both sentences below are quoted from the approved form and the standards
+    # page. Not paraphrased, not to be.
+    "intro": (
+        "All members of the SPC, speakers, moderators, facilitators and authors must provide to "
+        "the CPD provider organization a written description of all relationships with for-profit "
+        "and not-for-profit organizations, irrespective of the subject being discussed, over the "
+        "previous 2 years including (but not necessarily limited to):"
+    ),
     "preamble": (
-        "Please disclose all relationships with for-profit and/or not-for-profit organizations "
-        "over the previous 2 years, irrespective of the subject being discussed."
+        "Please indicate the organization(s) with which you have/had a relationship over the "
+        "previous two years and briefly describe the nature of that relationship."
     ),
     "binary": {
         "no": "I do not have a relationship with a for-profit and/or a not-for-profit organization to disclose",

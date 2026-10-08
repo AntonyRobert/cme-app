@@ -234,6 +234,42 @@ def test_publishing_is_blocked_while_a_presenter_has_no_declaration():
     assert event.publication_blockers() == []
 
 
+def test_attaching_a_new_declaration_to_upcoming_sessions_does_not_confirm_them(ada):
+    """Attach and confirm are different steps: confirming is the presenter saying it is still accurate for this activity."""
+    program = make_program("Attach")
+    event = make_event(program=program, start=timezone.now() + datetime.timedelta(days=10), sessions=0)
+    mine = presenter_on(make_session(event, minutes=30), ada)
+    past = presenter_on(make_session(make_event(program=program, sessions=0), minutes=30), ada)  # already happened
+    other = presenter_on(make_session(event, minutes=30), make_person(given="Grace", family="Hopper"))
+    already = presenter_on(make_session(event, minutes=30), ada)
+    earlier = speaker_declaration(ada)
+    already.coi_declaration = earlier
+    already.save()
+
+    client = signed_in_client("ada@mcgill.ca")
+    client.post(reverse("rounds:disclosure"), {
+        "action": "declare", "activity_role": "moderator", "has_relationships": "no", "attested": "1",
+    })
+    new = COIDeclaration.objects.filter(person=ada).order_by("-declared_at").first()
+    for p in (mine, past, other, already):
+        p.refresh_from_db()
+    assert mine.coi_declaration == new and mine.coi_confirmed_at is None  # attached, not confirmed
+    assert already.coi_declaration == earlier  # a session that had one keeps it
+    assert past.coi_declaration is None  # a past session is not re-pointed
+    assert other.coi_declaration is None and other.coi_confirmed_at is None  # someone else's session untouched
+
+
+def test_the_slide_declares_off_label_use_either_way():
+    yes = declare(make_person(given="Ada", family="Lovelace"), {}, version=V, role="speaker",
+                  has_relationships=False, attested=True, off_label=True, generic_names=True)
+    no = declare(make_person(given="Grace", family="Hopper"), {}, version=V, role="speaker",
+                 has_relationships=False, attested=True, off_label=False, generic_names=True)
+    author = declare(make_person(), {}, version=V, role="author", has_relationships=False, attested=True)
+    assert "off-label use of medication" in slide_text(yes) and "identify as such" in slide_text(yes)
+    assert "makes no off-label therapeutic recommendations" in slide_text(no)
+    assert "off-label" not in slide_text(author)  # not a speaker: not asked, not on the slide
+
+
 def test_the_event_admin_page_says_why_it_cannot_be_published(client):
     from django.contrib.auth import get_user_model
 
@@ -275,7 +311,8 @@ def test_the_presenter_page_declares_confirms_and_shows_the_slide(ada):
 
     page = client.get(url).content.decode()
     assert "You have no declaration in force" in page
-    assert "over the previous 2 years" in page
+    assert "over the previous 2 years including (but not necessarily limited to):" in page  # the standards page, verbatim
+    assert "Please indicate the organization(s) with which you have/had a relationship over the previous two years" in page  # the form, verbatim
     assert "I do not have a relationship with a for-profit and/or a not-for-profit organization to disclose" in page
     assert "Name of for-profit or not-for-profit organization(s)" in page
 

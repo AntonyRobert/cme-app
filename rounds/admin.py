@@ -881,7 +881,7 @@ class COIDeclarationAdmin(AppendOnlyAdmin):
         ]
         return [
             (None, {"fields": ["person", "declared_at", "disclosure_text_version", "activity_role", "activity_role_other"]}),
-            ("Disclosure", {"fields": ["has_relationships"], "description": std["preamble"]}),
+            ("Disclosure", {"fields": ["has_relationships"], "description": std["intro"] + " " + std["preamble"]}),
             (
                 "Relationships, by category (only when there is one to disclose)",
                 {"fields": question_fields},
